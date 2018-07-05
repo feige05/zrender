@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title>Image</title>
+    <script src="../dist/zrender.js"></script>
+</head>
+<body>
+    <style>
+        html, body, #main {
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+    <div id="main"></div>
+    <script type="text/javascript">
+        var zr = zrender.init(document.getElementById('main'));
+                var sprite = new zrender.Sprite({
+                    position: [0 * 20, 0 * 20],
+                    autoplay: true,
+                    loop: true,
+                    generate: true,
+                    scale: [1, 1],
+                    style: {
+                        image: 'radar.png',
+                        frame: 0,
+                        duration: 500,
+                        x: 80,
+                        y: 80,
+                        w: 112,
+                        h: 115,
+                    }
+                });
+                sprite.onload = function(){
+                    console.log('sprite image onload:::::',this)
+                }
+                zr.add(sprite);
+    </script>
+</body>
+</html>

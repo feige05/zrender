@@ -799,6 +799,9 @@ function isPrimitive(obj) {
  */
 function HashMap(obj) {
     var isArr = isArray(obj);
+    // Key should not be set on this, otherwise
+    // methods get/set/... may be overrided.
+    this.data = {};
     var thisMap = this;
 
     (obj instanceof HashMap)
@@ -810,32 +813,30 @@ function HashMap(obj) {
     }
 }
 
-// Add prefix to avoid conflict with Object.prototype.
-
 HashMap.prototype = {
     constructor: HashMap,
     // Do not provide `has` method to avoid defining what is `has`.
     // (We usually treat `null` and `undefined` as the same, different
     // from ES6 Map).
     get: function (key) {
-        return this.hasOwnProperty(key) ? this[key] : null;
+        return this.data.hasOwnProperty(key) ? this.data[key] : null;
     },
     set: function (key, value) {
         // Comparing with invocation chaining, `return value` is more commonly
         // used in this case: `var someVal = map.set('a', genVal());`
-        return (this[key] = value);
+        return (this.data[key] = value);
     },
     // Although util.each can be performed on this hashMap directly, user
     // should not use the exposed keys, who are prefixed.
     each: function (cb, context) {
         context !== void 0 && (cb = bind(cb, context));
-        for (var key in this) {
-            this.hasOwnProperty(key) && cb(this[key], key);
+        for (var key in this.data) {
+            this.data.hasOwnProperty(key) && cb(this.data[key], key);
         }
     },
     // Do not use this method if performance sensitive.
     removeKey: function (key) {
-        delete this[key];
+        delete this.data[key];
     }
 };
 
@@ -1284,7 +1285,7 @@ function param(target, e) {
 }
 
 /**
- * 事件扩展
+ * Event Mixin
  * @module zrender/mixin/Eventful
  * @author Kener (@Kener-林峰, kener.linfeng@gmail.com)
  *         pissang (https://www.github.com/pissang)
@@ -1293,12 +1294,24 @@ function param(target, e) {
 var arrySlice = Array.prototype.slice;
 
 /**
- * 事件分发器
+ * Event dispatcher.
+ *
  * @alias module:zrender/mixin/Eventful
  * @constructor
+ * @param {Object} [eventProcessor] The object eventProcessor is the scope when
+ *        `eventProcessor.xxx` called.
+ * @param {Function} [eventProcessor.normalizeQuery]
+ *        param: {string|Object} Raw query.
+ *        return: {string|Object} Normalized query.
+ * @param {Function} [eventProcessor.filter] Event will be dispatched only
+ *        if it returns `true`.
+ *        param: {string} eventType
+ *        param: {string|Object} query
+ *        return: {boolean}
  */
-var Eventful = function () {
+var Eventful = function (eventProcessor) {
     this._$handlers = {};
+    this._$eventProcessor = eventProcessor;
 };
 
 Eventful.prototype = {
@@ -1306,18 +1319,27 @@ Eventful.prototype = {
     constructor: Eventful,
 
     /**
-     * 单次触发绑定，trigger后销毁
+     * The handler can only be triggered once, then removed.
      *
-     * @param {string} event 事件名
-     * @param {Function} handler 响应函数
+     * @param {string} event The event name.
+     * @param {string|Object} [query] Condition used on event filter.
+     * @param {Function} handler The event handler.
      * @param {Object} context
      */
-    one: function (event, handler, context) {
+    one: function (event, query, handler, context) {
         var _h = this._$handlers;
+
+        if (typeof query === 'function') {
+            context = handler;
+            handler = query;
+            query = null;
+        }
 
         if (!handler || !event) {
             return this;
         }
+
+        query = normalizeQuery(this, query);
 
         if (!_h[event]) {
             _h[event] = [];
@@ -1332,6 +1354,7 @@ Eventful.prototype = {
         _h[event].push({
             h: handler,
             one: true,
+            query: query,
             ctx: context || this
         });
 
@@ -1339,17 +1362,27 @@ Eventful.prototype = {
     },
 
     /**
-     * 绑定事件
-     * @param {string} event 事件名
-     * @param {Function} handler 事件处理函数
+     * Bind a handler.
+     *
+     * @param {string} event The event name.
+     * @param {string|Object} [query] Condition used on event filter.
+     * @param {Function} handler The event handler.
      * @param {Object} [context]
      */
-    on: function (event, handler, context) {
+    on: function (event, query, handler, context) {
         var _h = this._$handlers;
+
+        if (typeof query === 'function') {
+            context = handler;
+            handler = query;
+            query = null;
+        }
 
         if (!handler || !event) {
             return this;
         }
+
+        query = normalizeQuery(this, query);
 
         if (!_h[event]) {
             _h[event] = [];
@@ -1364,6 +1397,7 @@ Eventful.prototype = {
         _h[event].push({
             h: handler,
             one: false,
+            query: query,
             ctx: context || this
         });
 
@@ -1371,7 +1405,8 @@ Eventful.prototype = {
     },
 
     /**
-     * 是否绑定了事件
+     * Whether any handler has bound.
+     *
      * @param  {string}  event
      * @return {boolean}
      */
@@ -1381,9 +1416,10 @@ Eventful.prototype = {
     },
 
     /**
-     * 解绑事件
-     * @param {string} event 事件名
-     * @param {Function} [handler] 事件处理函数
+     * Unbind a event.
+     *
+     * @param {string} event The event name.
+     * @param {Function} [handler] The event handler.
      */
     off: function (event, handler) {
         var _h = this._$handlers;
@@ -1397,7 +1433,7 @@ Eventful.prototype = {
             if (_h[event]) {
                 var newList = [];
                 for (var i = 0, l = _h[event].length; i < l; i++) {
-                    if (_h[event][i]['h'] != handler) {
+                    if (_h[event][i].h != handler) {
                         newList.push(_h[event][i]);
                     }
                 }
@@ -1416,14 +1452,15 @@ Eventful.prototype = {
     },
 
     /**
-     * 事件分发
+     * Dispatch a event.
      *
-     * @param {string} type 事件类型
+     * @param {string} type The event name.
      */
     trigger: function (type) {
         if (this._$handlers[type]) {
             var args = arguments;
             var argLen = args.length;
+            var eventProcessor = this._$eventProcessor;
 
             if (argLen > 3) {
                 args = arrySlice.call(args, 1);
@@ -1432,24 +1469,34 @@ Eventful.prototype = {
             var _h = this._$handlers[type];
             var len = _h.length;
             for (var i = 0; i < len;) {
+                var hItem = _h[i];
+                if (eventProcessor
+                    && eventProcessor.filter
+                    && hItem.query != null
+                    && !eventProcessor.filter(type, hItem.query)
+                ) {
+                    i++;
+                    continue;
+                }
+
                 // Optimize advise from backbone
                 switch (argLen) {
                     case 1:
-                        _h[i]['h'].call(_h[i]['ctx']);
+                        hItem.h.call(hItem.ctx);
                         break;
                     case 2:
-                        _h[i]['h'].call(_h[i]['ctx'], args[1]);
+                        hItem.h.call(hItem.ctx, args[1]);
                         break;
                     case 3:
-                        _h[i]['h'].call(_h[i]['ctx'], args[1], args[2]);
+                        hItem.h.call(hItem.ctx, args[1], args[2]);
                         break;
                     default:
                         // have more than 2 given arguments
-                        _h[i]['h'].apply(_h[i]['ctx'], args);
+                        hItem.h.apply(hItem.ctx, args);
                         break;
                 }
 
-                if (_h[i]['one']) {
+                if (hItem.one) {
                     _h.splice(i, 1);
                     len--;
                 }
@@ -1463,13 +1510,15 @@ Eventful.prototype = {
     },
 
     /**
-     * 带有context的事件分发, 最后一个参数是事件回调的context
-     * @param {string} type 事件类型
+     * Dispatch a event with context, which is specified at the last parameter.
+     *
+     * @param {string} type The event name.
      */
     triggerWithContext: function (type) {
         if (this._$handlers[type]) {
             var args = arguments;
             var argLen = args.length;
+            var eventProcessor = this._$eventProcessor;
 
             if (argLen > 4) {
                 args = arrySlice.call(args, 1, args.length - 1);
@@ -1479,24 +1528,34 @@ Eventful.prototype = {
             var _h = this._$handlers[type];
             var len = _h.length;
             for (var i = 0; i < len;) {
+                var hItem = _h[i];
+                if (eventProcessor
+                    && eventProcessor.filter
+                    && hItem.query != null
+                    && !eventProcessor.filter(type, hItem.query)
+                ) {
+                    i++;
+                    continue;
+                }
+
                 // Optimize advise from backbone
                 switch (argLen) {
                     case 1:
-                        _h[i]['h'].call(ctx);
+                        hItem.h.call(ctx);
                         break;
                     case 2:
-                        _h[i]['h'].call(ctx, args[1]);
+                        hItem.h.call(ctx, args[1]);
                         break;
                     case 3:
-                        _h[i]['h'].call(ctx, args[1], args[2]);
+                        hItem.h.call(ctx, args[1], args[2]);
                         break;
                     default:
                         // have more than 2 given arguments
-                        _h[i]['h'].apply(ctx, args);
+                        hItem.h.apply(ctx, args);
                         break;
                 }
 
-                if (_h[i]['one']) {
+                if (hItem.one) {
                     _h.splice(i, 1);
                     len--;
                 }
@@ -1509,6 +1568,259 @@ Eventful.prototype = {
         return this;
     }
 };
+
+function normalizeQuery(host, query) {
+    var eventProcessor = host._$eventProcessor;
+    if (query != null && eventProcessor && eventProcessor.normalizeQuery) {
+        query = eventProcessor.normalizeQuery(query);
+    }
+    return query;
+}
+
+// ----------------------
+// The events in zrender
+// ----------------------
+
+/**
+ * @event module:zrender/mixin/Eventful#onclick
+ * @type {Function}
+ * @default null
+ */
+/**
+ * @event module:zrender/mixin/Eventful#onmouseover
+ * @type {Function}
+ * @default null
+ */
+/**
+ * @event module:zrender/mixin/Eventful#onmouseout
+ * @type {Function}
+ * @default null
+ */
+/**
+ * @event module:zrender/mixin/Eventful#onmousemove
+ * @type {Function}
+ * @default null
+ */
+/**
+ * @event module:zrender/mixin/Eventful#onmousewheel
+ * @type {Function}
+ * @default null
+ */
+/**
+ * @event module:zrender/mixin/Eventful#onmousedown
+ * @type {Function}
+ * @default null
+ */
+/**
+ * @event module:zrender/mixin/Eventful#onmouseup
+ * @type {Function}
+ * @default null
+ */
+/**
+ * @event module:zrender/mixin/Eventful#ondrag
+ * @type {Function}
+ * @default null
+ */
+/**
+ * @event module:zrender/mixin/Eventful#ondragstart
+ * @type {Function}
+ * @default null
+ */
+/**
+ * @event module:zrender/mixin/Eventful#ondragend
+ * @type {Function}
+ * @default null
+ */
+/**
+ * @event module:zrender/mixin/Eventful#ondragenter
+ * @type {Function}
+ * @default null
+ */
+/**
+ * @event module:zrender/mixin/Eventful#ondragleave
+ * @type {Function}
+ * @default null
+ */
+/**
+ * @event module:zrender/mixin/Eventful#ondragover
+ * @type {Function}
+ * @default null
+ */
+/**
+ * @event module:zrender/mixin/Eventful#ondrop
+ * @type {Function}
+ * @default null
+ */
+
+/**
+ * 事件辅助类
+ * @module zrender/core/event
+ * @author Kener (@Kener-林峰, kener.linfeng@gmail.com)
+ */
+
+var isDomLevel2 = (typeof window !== 'undefined') && !!window.addEventListener;
+
+var MOUSE_EVENT_REG = /^(?:mouse|pointer|contextmenu|drag|drop)|click/;
+
+function getBoundingClientRect(el) {
+    // BlackBerry 5, iOS 3 (original iPhone) don't have getBoundingRect
+    return el.getBoundingClientRect ? el.getBoundingClientRect() : {left: 0, top: 0};
+}
+
+// `calculate` is optional, default false
+function clientToLocal(el, e, out, calculate) {
+    out = out || {};
+
+    // According to the W3C Working Draft, offsetX and offsetY should be relative
+    // to the padding edge of the target element. The only browser using this convention
+    // is IE. Webkit uses the border edge, Opera uses the content edge, and FireFox does
+    // not support the properties.
+    // (see http://www.jacklmoore.com/notes/mouse-position/)
+    // In zr painter.dom, padding edge equals to border edge.
+
+    // FIXME
+    // When mousemove event triggered on ec tooltip, target is not zr painter.dom, and
+    // offsetX/Y is relative to e.target, where the calculation of zrX/Y via offsetX/Y
+    // is too complex. So css-transfrom dont support in this case temporarily.
+    if (calculate || !env$1.canvasSupported) {
+        defaultGetZrXY(el, e, out);
+    }
+    // Caution: In FireFox, layerX/layerY Mouse position relative to the closest positioned
+    // ancestor element, so we should make sure el is positioned (e.g., not position:static).
+    // BTW1, Webkit don't return the same results as FF in non-simple cases (like add
+    // zoom-factor, overflow / opacity layers, transforms ...)
+    // BTW2, (ev.offsetY || ev.pageY - $(ev.target).offset().top) is not correct in preserve-3d.
+    // <https://bugs.jquery.com/ticket/8523#comment:14>
+    // BTW3, In ff, offsetX/offsetY is always 0.
+    else if (env$1.browser.firefox && e.layerX != null && e.layerX !== e.offsetX) {
+        out.zrX = e.layerX;
+        out.zrY = e.layerY;
+    }
+    // For IE6+, chrome, safari, opera. (When will ff support offsetX?)
+    else if (e.offsetX != null) {
+        out.zrX = e.offsetX;
+        out.zrY = e.offsetY;
+    }
+    // For some other device, e.g., IOS safari.
+    else {
+        defaultGetZrXY(el, e, out);
+    }
+
+    return out;
+}
+
+function defaultGetZrXY(el, e, out) {
+    // This well-known method below does not support css transform.
+    var box = getBoundingClientRect(el);
+    out.zrX = e.clientX - box.left;
+    out.zrY = e.clientY - box.top;
+}
+
+/**
+ * 如果存在第三方嵌入的一些dom触发的事件，或touch事件，需要转换一下事件坐标.
+ * `calculate` is optional, default false.
+ */
+function normalizeEvent(el, e, calculate) {
+
+    e = e || window.event;
+
+    if (e.zrX != null) {
+        return e;
+    }
+
+    var eventType = e.type;
+    var isTouch = eventType && eventType.indexOf('touch') >= 0;
+
+    if (!isTouch) {
+        clientToLocal(el, e, e, calculate);
+        e.zrDelta = (e.wheelDelta) ? e.wheelDelta / 120 : -(e.detail || 0) / 3;
+    }
+    else {
+        var touch = eventType != 'touchend'
+            ? e.targetTouches[0]
+            : e.changedTouches[0];
+        touch && clientToLocal(el, touch, e, calculate);
+    }
+
+    // Add which for click: 1 === left; 2 === middle; 3 === right; otherwise: 0;
+    // See jQuery: https://github.com/jquery/jquery/blob/master/src/event.js
+    // If e.which has been defined, if may be readonly,
+    // see: https://developer.mozilla.org/en-US/docs/Web/API/MouseEvent/which
+    var button = e.button;
+    if (e.which == null && button !== undefined && MOUSE_EVENT_REG.test(e.type)) {
+        e.which = (button & 1 ? 1 : (button & 2 ? 3 : (button & 4 ? 2 : 0)));
+    }
+
+    return e;
+}
+
+/**
+ * @param {HTMLElement} el
+ * @param {string} name
+ * @param {Function} handler
+ */
+function addEventListener(el, name, handler) {
+    if (isDomLevel2) {
+        // Reproduct the console warning:
+        // [Violation] Added non-passive event listener to a scroll-blocking <some> event.
+        // Consider marking event handler as 'passive' to make the page more responsive.
+        // Just set console log level: verbose in chrome dev tool.
+        // then the warning log will be printed when addEventListener called.
+        // See https://github.com/WICG/EventListenerOptions/blob/gh-pages/explainer.md
+        // We have not yet found a neat way to using passive. Because in zrender the dom event
+        // listener delegate all of the upper events of element. Some of those events need
+        // to prevent default. For example, the feature `preventDefaultMouseMove` of echarts.
+        // Before passive can be adopted, these issues should be considered:
+        // (1) Whether and how a zrender user specifies an event listener passive. And by default,
+        // passive or not.
+        // (2) How to tread that some zrender event listener is passive, and some is not. If
+        // we use other way but not preventDefault of mousewheel and touchmove, browser
+        // compatibility should be handled.
+
+        // var opts = (env.passiveSupported && name === 'mousewheel')
+        //     ? {passive: true}
+        //     // By default, the third param of el.addEventListener is `capture: false`.
+        //     : void 0;
+        // el.addEventListener(name, handler /* , opts */);
+        el.addEventListener(name, handler);
+    }
+    else {
+        el.attachEvent('on' + name, handler);
+    }
+}
+
+function removeEventListener(el, name, handler) {
+    if (isDomLevel2) {
+        el.removeEventListener(name, handler);
+    }
+    else {
+        el.detachEvent('on' + name, handler);
+    }
+}
+
+/**
+ * preventDefault and stopPropagation.
+ * Notice: do not do that in zrender. Upper application
+ * do that if necessary.
+ *
+ * @memberOf module:zrender/core/event
+ * @method
+ * @param {Event} e : event对象
+ */
+var stop = isDomLevel2
+    ? function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.cancelBubble = true;
+    }
+    : function (e) {
+        e.returnValue = false;
+        e.cancelBubble = true;
+    };
+
+
+
+// 做向上兼容
 
 var SILENT = 'silent';
 
@@ -1529,8 +1841,13 @@ function makeEventPacket(eveType, targetInfo, event) {
         pinchScale: event.pinchScale,
         wheelDelta: event.zrDelta,
         zrByTouch: event.zrByTouch,
-        which: event.which
+        which: event.which,
+        stop: stopEvent
     };
+}
+
+function stopEvent(event) {
+    stop(this.event);
 }
 
 function EmptyProxy () {}
@@ -2098,6 +2415,7 @@ transformableProto.needLocalTransform = function () {
         || isNotAroundZero(this.scale[1] - 1);
 };
 
+var scaleTmp = [];
 transformableProto.updateTransform = function () {
     var parent = this.parent;
     var parentHasTransform = parent && parent.transform;
@@ -2130,6 +2448,20 @@ transformableProto.updateTransform = function () {
     // 保存这个变换矩阵
     this.transform = m;
 
+    var globalScaleRatio = this.globalScaleRatio;
+    if (globalScaleRatio != null && globalScaleRatio !== 1) {
+        this.getGlobalScale(scaleTmp);
+        var relX = scaleTmp[0] < 0 ? -1 : 1;
+        var relY = scaleTmp[1] < 0 ? -1 : 1;
+        var sx = ((scaleTmp[0] - relX) * globalScaleRatio + relX) / scaleTmp[0] || 0;
+        var sy = ((scaleTmp[1] - relY) * globalScaleRatio + relY) / scaleTmp[1] || 0;
+
+        m[0] *= sx;
+        m[1] *= sx;
+        m[2] *= sy;
+        m[3] *= sy;
+    }
+
     this.invTransform = this.invTransform || create$1();
     invert(this.invTransform, m);
 };
@@ -2159,20 +2491,12 @@ transformableProto.restoreTransform = function (ctx) {
 };
 
 var tmpTransform = [];
+var originTransform = create$1();
 
-/**
- * 分解`transform`矩阵到`position`, `rotation`, `scale`
- */
-transformableProto.decomposeTransform = function () {
-    if (!this.transform) {
+transformableProto.setLocalTransform = function (m) {
+    if (!m) {
+        // TODO return or set identity?
         return;
-    }
-    var parent = this.parent;
-    var m = this.transform;
-    if (parent && parent.transform) {
-        // Get local transform and decompose them to position, scale, rotation
-        mul$1(tmpTransform, parent.invTransform, m);
-        m = tmpTransform;
     }
     var sx = m[0] * m[0] + m[1] * m[1];
     var sy = m[2] * m[2] + m[3] * m[3];
@@ -2190,31 +2514,61 @@ transformableProto.decomposeTransform = function () {
     if (m[3] < 0) {
         sy = -sy;
     }
+
     position[0] = m[4];
     position[1] = m[5];
     scale$$1[0] = sx;
     scale$$1[1] = sy;
     this.rotation = Math.atan2(-m[1] / sy, m[0] / sx);
 };
+/**
+ * 分解`transform`矩阵到`position`, `rotation`, `scale`
+ */
+transformableProto.decomposeTransform = function () {
+    if (!this.transform) {
+        return;
+    }
+    var parent = this.parent;
+    var m = this.transform;
+    if (parent && parent.transform) {
+        // Get local transform and decompose them to position, scale, rotation
+        mul$1(tmpTransform, parent.invTransform, m);
+        m = tmpTransform;
+    }
+    var origin = this.origin;
+    if (origin && (origin[0] || origin[1])) {
+        originTransform[4] = origin[0];
+        originTransform[5] = origin[1];
+        mul$1(tmpTransform, m, originTransform);
+        tmpTransform[4] -= origin[0];
+        tmpTransform[5] -= origin[1];
+        m = tmpTransform;
+    }
+
+    this.setLocalTransform(m);
+};
 
 /**
  * Get global scale
  * @return {Array.<number>}
  */
-transformableProto.getGlobalScale = function () {
+transformableProto.getGlobalScale = function (out) {
     var m = this.transform;
+    out = out || [];
     if (!m) {
-        return [1, 1];
+        out[0] = 1;
+        out[1] = 1;
+        return out;
     }
-    var sx = Math.sqrt(m[0] * m[0] + m[1] * m[1]);
-    var sy = Math.sqrt(m[2] * m[2] + m[3] * m[3]);
+    out[0] = Math.sqrt(m[0] * m[0] + m[1] * m[1]);
+    out[1] = Math.sqrt(m[2] * m[2] + m[3] * m[3]);
     if (m[0] < 0) {
-        sx = -sx;
+        out[0] = -out[0];
     }
     if (m[3] < 0) {
-        sy = -sy;
+        out[1] = -out[1];
     }
-    return [sx, sy];
+    return out;
 };
 /**
  * 变换坐标位置到 shape 的局部坐标空间
@@ -4177,10 +4531,6 @@ else if (debugMode > 1) {
 
 var zrLog = log;
 
-/**
- * @alias modue:zrender/mixin/Animatable
- * @constructor
- */
 var Animatable = function () {
 
     /**
@@ -4436,13 +4786,6 @@ Animatable.prototype = {
     }
 };
 
-/**
- * @alias module:zrender/Element
- * @constructor
- * @extends {module:zrender/mixin/Animatable}
- * @extends {module:zrender/mixin/Transformable}
- * @extends {module:zrender/mixin/Eventful}
- */
 var Element = function (opts) { // jshint ignore:line
 
     Transformable.call(this, opts);
@@ -4903,12 +5246,6 @@ BoundingRect.create = function (rect) {
  *     zr.add(g);
  */
 
-/**
- * @alias module:zrender/graphic/Group
- * @constructor
- * @extends module:zrender/mixin/Transformable
- * @extends module:zrender/mixin/Eventful
- */
 var Group = function (opts) {
 
     opts = opts || {};
@@ -5854,8 +6191,6 @@ function sort(array, compare, lo, hi) {
     ts.forceMergeRuns();
 }
 
-// Use timsort because in most case elements are partially sorted
-// https://jsfiddle.net/pissang/jr4x7mdm/8/
 function shapeCompareFunc(a, b) {
     if (a.zlevel === b.zlevel) {
         if (a.z === b.z) {
@@ -6112,9 +6447,8 @@ var STYLE_COMMON_PROPS = [
 // var SHADOW_PROPS = STYLE_COMMON_PROPS.slice(0, 4);
 // var LINE_PROPS = STYLE_COMMON_PROPS.slice(4);
 
-var Style = function (opts, host) {
+var Style = function (opts) {
     this.extendFrom(opts, false);
-    this.host = host;
 };
 
 function createLinearGradient(ctx, obj, rect) {
@@ -6166,11 +6500,6 @@ Style.prototype = {
     constructor: Style,
 
     /**
-     * @type {module:zrender/graphic/Displayable}
-     */
-    host: null,
-
-    /**
      * @type {string}
      */
     fill: '#000',
@@ -6184,6 +6513,16 @@ Style.prototype = {
      * @type {number}
      */
     opacity: 1,
+
+    /**
+     * @type {number}
+     */
+    fillOpacity: null,
+
+    /**
+     * @type {number}
+     */
+    strokeOpacity: null,
 
     /**
      * @type {Array.<number>}
@@ -6890,7 +7229,7 @@ function createOrUpdateImage(newImageOrSrc, image, hostEl, cb, cbPayload) {
         }
         else {
             !image && (image = new Image());
-            image.onload = imageOnLoad;
+            image.onload = image.onerror = imageOnLoad;
 
             globalImageCache.put(
                 newImageOrSrc,
@@ -6913,7 +7252,7 @@ function createOrUpdateImage(newImageOrSrc, image, hostEl, cb, cbPayload) {
 
 function imageOnLoad() {
     var cachedImgObj = this.__cachedImgObj;
-    this.onload = this.__cachedImgObj = null;
+    this.onload = this.onerror = this.__cachedImgObj = null;
 
     for (var i = 0; i < cachedImgObj.pending.length; i++) {
         var pendingWrap = cachedImgObj.pending[i];
@@ -7681,9 +8020,16 @@ function buildPath(ctx, shape) {
     r1 !== 0 && ctx.arc(x + r1, y + r1, r1, Math.PI, Math.PI * 1.5);
 }
 
-// TODO: Have not support 'start', 'end' yet.
 var VALID_TEXT_ALIGN = {left: 1, right: 1, center: 1};
 var VALID_TEXT_VERTICAL_ALIGN = {top: 1, bottom: 1, middle: 1};
+// Different from `STYLE_COMMON_PROPS` of `graphic/Style`,
+// the default value of shadowColor is `'transparent'`.
+var SHADOW_STYLE_COMMON_PROPS = [
+    ['textShadowBlur', 'shadowBlur', 0],
+    ['textShadowOffsetX', 'shadowOffsetX', 0],
+    ['textShadowOffsetY', 'shadowOffsetY', 0],
+    ['textShadowColor', 'shadowColor', 'transparent']
+];
 
 /**
  * @param {module:zrender/graphic/Style} style
@@ -7726,22 +8072,42 @@ function normalizeStyle(style) {
  * @param {module:zrender/graphic/Style} style
  * @param {Object|boolean} [rect] {x, y, width, height}
  *                  If set false, rect text is not used.
+ * @param {Element} [prevEl] For ctx prop cache.
  */
-function renderText(hostEl, ctx, text, style, rect) {
+function renderText(hostEl, ctx, text, style, rect, prevEl) {
     style.rich
         ? renderRichText(hostEl, ctx, text, style, rect)
-        : renderPlainText(hostEl, ctx, text, style, rect);
+        : renderPlainText(hostEl, ctx, text, style, rect, prevEl);
 }
 
-function renderPlainText(hostEl, ctx, text, style, rect) {
-    var font = setCtx(ctx, 'font', style.font || DEFAULT_FONT);
+// Avoid setting to ctx according to prevEl if possible for
+// performance in scenarios of large amount text.
+function renderPlainText(hostEl, ctx, text, style, rect, prevEl) {
+    'use strict';
+
+    var prevStyle = prevEl && prevEl.style;
+    // Some cache only available on textEl.
+    var isPrevTextEl = prevStyle && prevEl.type === 'text';
+
+    var styleFont = style.font || DEFAULT_FONT;
+    if (!isPrevTextEl || styleFont !== (prevStyle.font || DEFAULT_FONT)) {
+        ctx.font = styleFont;
+    }
+    // Use the final font from context-2d, because the final
+    // font might not be the style.font when it is illegal.
+    // But get `ctx.font` might be time consuming.
+    var computedFont = hostEl.__computedFont;
+    if (hostEl.__styleFont !== styleFont) {
+        hostEl.__styleFont = styleFont;
+        computedFont = hostEl.__computedFont = ctx.font;
+    }
 
     var textPadding = style.textPadding;
 
     var contentBlock = hostEl.__textCotentBlock;
-    if (!contentBlock || hostEl.__dirty) {
+    if (!contentBlock || hostEl.__dirtyText) {
         contentBlock = hostEl.__textCotentBlock = parsePlainText(
-            text, font, textPadding, style.truncate
+            text, computedFont, textPadding, style.truncate
         );
     }
 
@@ -7753,7 +8119,7 @@ function renderPlainText(hostEl, ctx, text, style, rect) {
     var boxPos = getBoxPosition(outerHeight, style, rect);
     var baseX = boxPos.baseX;
     var baseY = boxPos.baseY;
-    var textAlign = boxPos.textAlign;
+    var textAlign = boxPos.textAlign || 'left';
     var textVerticalAlign = boxPos.textVerticalAlign;
 
     // Origin of textRotation should be the base point of text drawing.
@@ -7766,7 +8132,7 @@ function renderPlainText(hostEl, ctx, text, style, rect) {
     var needDrawBg = needDrawBackground(style);
     if (needDrawBg || textPadding) {
         // Consider performance, do not call getTextWidth util necessary.
-        var textWidth = getWidth(text, font);
+        var textWidth = getWidth(text, computedFont);
         var outerWidth = textWidth;
         textPadding && (outerWidth += textPadding[1] + textPadding[3]);
         var boxX = adjustTextX(baseX, outerWidth, textAlign);
@@ -7779,44 +8145,69 @@ function renderPlainText(hostEl, ctx, text, style, rect) {
         }
     }
 
-    setCtx(ctx, 'textAlign', textAlign || 'left');
+    // Always set textAlign and textBase line, because it is difficute to calculate
+    // textAlign from prevEl, and we dont sure whether textAlign will be reset if
+    // font set happened.
+    ctx.textAlign = textAlign;
     // Force baseline to be "middle". Otherwise, if using "top", the
     // text will offset downward a little bit in font "Microsoft YaHei".
-    setCtx(ctx, 'textBaseline', 'middle');
+    ctx.textBaseline = 'middle';
 
     // Always set shadowBlur and shadowOffset to avoid leak from displayable.
-    setCtx(ctx, 'shadowBlur', style.textShadowBlur || 0);
-    setCtx(ctx, 'shadowColor', style.textShadowColor || 'transparent');
-    setCtx(ctx, 'shadowOffsetX', style.textShadowOffsetX || 0);
-    setCtx(ctx, 'shadowOffsetY', style.textShadowOffsetY || 0);
+    for (var i = 0; i < SHADOW_STYLE_COMMON_PROPS.length; i++) {
+        var propItem = SHADOW_STYLE_COMMON_PROPS[i];
+        var styleProp = propItem[0];
+        var ctxProp = propItem[1];
+        var val = style[styleProp];
+        if (!isPrevTextEl || val !== prevStyle[styleProp]) {
+            ctx[ctxProp] = fixShadow(ctx, ctxProp, val || propItem[2]);
+        }
+    }
 
     // `textBaseline` is set as 'middle'.
     textY += lineHeight / 2;
 
     var textStrokeWidth = style.textStrokeWidth;
+    var textStrokeWidthPrev = isPrevTextEl ? prevStyle.textStrokeWidth : null;
+    var strokeWidthChanged = !isPrevTextEl || textStrokeWidth !== textStrokeWidthPrev;
+    var strokeChanged = !isPrevTextEl || strokeWidthChanged || style.textStroke !== prevStyle.textStroke;
     var textStroke = getStroke(style.textStroke, textStrokeWidth);
     var textFill = getFill(style.textFill);
 
     if (textStroke) {
-        setCtx(ctx, 'lineWidth', textStrokeWidth);
-        setCtx(ctx, 'strokeStyle', textStroke);
+        if (strokeWidthChanged) {
+            ctx.lineWidth = textStrokeWidth;
+        }
+        if (strokeChanged) {
+            ctx.strokeStyle = textStroke;
+        }
     }
     if (textFill) {
-        setCtx(ctx, 'fillStyle', textFill);
+        if (!isPrevTextEl || style.textFill !== prevStyle.textFill) {
+            ctx.fillStyle = textFill;
+        }
     }
 
-    for (var i = 0; i < textLines.length; i++) {
+    // Optimize simply, in most cases only one line exists.
+    if (textLines.length === 1) {
         // Fill after stroke so the outline will not cover the main part.
-        textStroke && ctx.strokeText(textLines[i], textX, textY);
-        textFill && ctx.fillText(textLines[i], textX, textY);
-        textY += lineHeight;
+        textStroke && ctx.strokeText(textLines[0], textX, textY);
+        textFill && ctx.fillText(textLines[0], textX, textY);
+    }
+    else {
+        for (var i = 0; i < textLines.length; i++) {
+            // Fill after stroke so the outline will not cover the main part.
+            textStroke && ctx.strokeText(textLines[i], textX, textY);
+            textFill && ctx.fillText(textLines[i], textX, textY);
+            textY += lineHeight;
+        }
     }
 }
 
 function renderRichText(hostEl, ctx, text, style, rect) {
     var contentBlock = hostEl.__textCotentBlock;
 
-    if (!contentBlock || hostEl.__dirty) {
+    if (!contentBlock || hostEl.__dirtyText) {
         contentBlock = hostEl.__textCotentBlock = parseRichText(text, style);
     }
 
@@ -8015,7 +8406,16 @@ function drawBackground(hostEl, ctx, style, x, y, width, height) {
 
     if (isPlainBg) {
         setCtx(ctx, 'fillStyle', textBackgroundColor);
-        ctx.fill();
+
+        if (style.fillOpacity != null) {
+            var originalGlobalAlpha = ctx.globalAlpha;
+            ctx.globalAlpha = style.fillOpacity * style.opacity;
+            ctx.fill();
+            ctx.globalAlpha = originalGlobalAlpha;
+        }
+        else {
+            ctx.fill();
+        }
     }
     else if (isObject(textBackgroundColor)) {
         var image = textBackgroundColor.image;
@@ -8031,7 +8431,16 @@ function drawBackground(hostEl, ctx, style, x, y, width, height) {
     if (textBorderWidth && textBorderColor) {
         setCtx(ctx, 'lineWidth', textBorderWidth);
         setCtx(ctx, 'strokeStyle', textBorderColor);
-        ctx.stroke();
+
+        if (style.strokeOpacity != null) {
+            var originalGlobalAlpha = ctx.globalAlpha;
+            ctx.globalAlpha = style.strokeOpacity * style.opacity;
+            ctx.stroke();
+            ctx.globalAlpha = originalGlobalAlpha;
+        }
+        else {
+            ctx.stroke();
+        }
     }
 }
 
@@ -8179,6 +8588,9 @@ RectText.prototype = {
         }
 
         // FIXME
+        // Do not provide prevEl to `textHelper.renderText` for ctx prop cache,
+        // but use `ctx.save()` and `ctx.restore()`. Because the cache for rect
+        // text propably break the cache for its host elements.
         ctx.save();
 
         // Transform rect to view space
@@ -8208,11 +8620,6 @@ RectText.prototype = {
  */
 
 
-/**
- * @alias module:zrender/graphic/Displayable
- * @extends module:zrender/Element
- * @extends module:zrender/graphic/mixin/RectText
- */
 function Displayable(opts) {
 
     opts = opts || {};
@@ -8343,8 +8750,11 @@ Displayable.prototype = {
      * @type {boolean}
      */
     incremental: false,
-    // inplace is used with incremental
-    inplace: false,
+    /**
+     * Scale ratio for global scale.
+     * @type {boolean}
+     */
+    globalScaleRatio: 1,
 
     beforeBrush: function (ctx) {},
 
@@ -8401,7 +8811,7 @@ Displayable.prototype = {
      * Mark displayable element dirty and refresh next frame
      */
     dirty: function () {
-        this.__dirty = true;
+        this.__dirty = this.__dirtyText = true;
 
         this._rect = null;
 
@@ -8464,13 +8874,8 @@ Displayable.prototype = {
 inherits(Displayable, Element);
 
 mixin(Displayable, RectText);
+// zrUtil.mixin(Displayable, Stateful);
 
-/**
- * @alias zrender/graphic/Image
- * @extends module:zrender/graphic/Displayable
- * @constructor
- * @param {Object} opts
- */
 function ZImage(opts) {
     Displayable.call(this, opts);
 }
@@ -8848,12 +9253,17 @@ Painter.prototype = {
         }
         var elMirror = new el.constructor({
             style: el.style,
-            shape: el.shape
+            shape: el.shape,
+            z: el.z,
+            z2: el.z2,
+            silent: el.silent
         });
         elMirror.__from = el;
         el.__hoverMir = elMirror;
-        elMirror.setStyle(hoverStyle);
+        hoverStyle && elMirror.setStyle(hoverStyle);
         this._hoverElements.push(elMirror);
+
+        return elMirror;
     },
 
     removeHover: function (el) {
@@ -8919,6 +9329,7 @@ Painter.prototype = {
                 this._doPaintEl(el, hoverLayer, true, scope);
             }
         }
+
         hoverLayer.ctx.restore();
     },
 
@@ -9007,7 +9418,7 @@ Painter.prototype = {
             for (var i = start; i < layer.__endIndex; i++) {
                 var el = list[i];
                 this._doPaintEl(el, layer, paintAll, scope);
-                el.__dirty = false;
+                el.__dirty = el.__dirtyText = false;
 
                 if (useTimer) {
                     // Date.now can be executed in 13,025,305 ops/second.
@@ -9609,162 +10020,6 @@ Painter.prototype = {
 };
 
 /**
- * 事件辅助类
- * @module zrender/core/event
- * @author Kener (@Kener-林峰, kener.linfeng@gmail.com)
- */
-
-var isDomLevel2 = (typeof window !== 'undefined') && !!window.addEventListener;
-
-var MOUSE_EVENT_REG = /^(?:mouse|pointer|contextmenu|drag|drop)|click/;
-
-function getBoundingClientRect(el) {
-    // BlackBerry 5, iOS 3 (original iPhone) don't have getBoundingRect
-    return el.getBoundingClientRect ? el.getBoundingClientRect() : {left: 0, top: 0};
-}
-
-// `calculate` is optional, default false
-function clientToLocal(el, e, out, calculate) {
-    out = out || {};
-
-    // According to the W3C Working Draft, offsetX and offsetY should be relative
-    // to the padding edge of the target element. The only browser using this convention
-    // is IE. Webkit uses the border edge, Opera uses the content edge, and FireFox does
-    // not support the properties.
-    // (see http://www.jacklmoore.com/notes/mouse-position/)
-    // In zr painter.dom, padding edge equals to border edge.
-
-    // FIXME
-    // When mousemove event triggered on ec tooltip, target is not zr painter.dom, and
-    // offsetX/Y is relative to e.target, where the calculation of zrX/Y via offsetX/Y
-    // is too complex. So css-transfrom dont support in this case temporarily.
-    if (calculate || !env$1.canvasSupported) {
-        defaultGetZrXY(el, e, out);
-    }
-    // Caution: In FireFox, layerX/layerY Mouse position relative to the closest positioned
-    // ancestor element, so we should make sure el is positioned (e.g., not position:static).
-    // BTW1, Webkit don't return the same results as FF in non-simple cases (like add
-    // zoom-factor, overflow / opacity layers, transforms ...)
-    // BTW2, (ev.offsetY || ev.pageY - $(ev.target).offset().top) is not correct in preserve-3d.
-    // <https://bugs.jquery.com/ticket/8523#comment:14>
-    // BTW3, In ff, offsetX/offsetY is always 0.
-    else if (env$1.browser.firefox && e.layerX != null && e.layerX !== e.offsetX) {
-        out.zrX = e.layerX;
-        out.zrY = e.layerY;
-    }
-    // For IE6+, chrome, safari, opera. (When will ff support offsetX?)
-    else if (e.offsetX != null) {
-        out.zrX = e.offsetX;
-        out.zrY = e.offsetY;
-    }
-    // For some other device, e.g., IOS safari.
-    else {
-        defaultGetZrXY(el, e, out);
-    }
-
-    return out;
-}
-
-function defaultGetZrXY(el, e, out) {
-    // This well-known method below does not support css transform.
-    var box = getBoundingClientRect(el);
-    out.zrX = e.clientX - box.left;
-    out.zrY = e.clientY - box.top;
-}
-
-/**
- * 如果存在第三方嵌入的一些dom触发的事件，或touch事件，需要转换一下事件坐标.
- * `calculate` is optional, default false.
- */
-function normalizeEvent(el, e, calculate) {
-
-    e = e || window.event;
-
-    if (e.zrX != null) {
-        return e;
-    }
-
-    var eventType = e.type;
-    var isTouch = eventType && eventType.indexOf('touch') >= 0;
-
-    if (!isTouch) {
-        clientToLocal(el, e, e, calculate);
-        e.zrDelta = (e.wheelDelta) ? e.wheelDelta / 120 : -(e.detail || 0) / 3;
-    }
-    else {
-        var touch = eventType != 'touchend'
-            ? e.targetTouches[0]
-            : e.changedTouches[0];
-        touch && clientToLocal(el, touch, e, calculate);
-    }
-
-    // Add which for click: 1 === left; 2 === middle; 3 === right; otherwise: 0;
-    // See jQuery: https://github.com/jquery/jquery/blob/master/src/event.js
-    // If e.which has been defined, if may be readonly,
-    // see: https://developer.mozilla.org/en-US/docs/Web/API/MouseEvent/which
-    var button = e.button;
-    if (e.which == null && button !== undefined && MOUSE_EVENT_REG.test(e.type)) {
-        e.which = (button & 1 ? 1 : (button & 2 ? 3 : (button & 4 ? 2 : 0)));
-    }
-
-    return e;
-}
-
-/**
- * @param {HTMLElement} el
- * @param {string} name
- * @param {Function} handler
- */
-function addEventListener(el, name, handler) {
-    if (isDomLevel2) {
-        // Reproduct the console warning:
-        // [Violation] Added non-passive event listener to a scroll-blocking <some> event.
-        // Consider marking event handler as 'passive' to make the page more responsive.
-        // Just set console log level: verbose in chrome dev tool.
-        // then the warning log will be printed when addEventListener called.
-        // See https://github.com/WICG/EventListenerOptions/blob/gh-pages/explainer.md
-        // We have not yet found a neat way to using passive. Because in zrender the dom event
-        // listener delegate all of the upper events of element. Some of those events need
-        // to prevent default. For example, the feature `preventDefaultMouseMove` of echarts.
-        // Before passive can be adopted, these issues should be considered:
-        // (1) Whether and how a zrender user specifies an event listener passive. And by default,
-        // passive or not.
-        // (2) How to tread that some zrender event listener is passive, and some is not. If
-        // we use other way but not preventDefault of mousewheel and touchmove, browser
-        // compatibility should be handled.
-
-        // var opts = (env.passiveSupported && name === 'mousewheel')
-        //     ? {passive: true}
-        //     // By default, the third param of el.addEventListener is `capture: false`.
-        //     : void 0;
-        // el.addEventListener(name, handler /* , opts */);
-        el.addEventListener(name, handler);
-    }
-    else {
-        el.attachEvent('on' + name, handler);
-    }
-}
-
-function removeEventListener(el, name, handler) {
-    if (isDomLevel2) {
-        el.removeEventListener(name, handler);
-    }
-    else {
-        el.detachEvent('on' + name, handler);
-    }
-}
-
-/**
- * preventDefault and stopPropagation.
- * Notice: do not do that in zrender. Upper application
- * do that if necessary.
- *
- * @memberOf module:zrender/core/event
- * @method
- * @param {Event} e : event对象
- */
-
-/**
  * 动画主类, 调度和管理所有动画控制器
  *
  * @module zrender/animation/Animation
@@ -9774,34 +10029,6 @@ function removeEventListener(el, name, handler) {
 // http://iosoteric.com/additive-animations-animatewithduration-in-ios-8/
 // https://developer.apple.com/videos/wwdc2014/#236
 
-/**
- * @typedef {Object} IZRenderStage
- * @property {Function} update
- */
-
-/**
- * @alias module:zrender/animation/Animation
- * @constructor
- * @param {Object} [options]
- * @param {Function} [options.onframe]
- * @param {IZRenderStage} [options.stage]
- * @example
- *     var animation = new Animation();
- *     var obj = {
- *         x: 100,
- *         y: 100
- *     };
- *     animation.animate(node.position)
- *         .when(1000, {
- *             x: 500,
- *             y: 500
- *         })
- *         .when(2000, {
- *             x: 100,
- *             y: 100
- *         })
- *         .start('spline');
- */
 var Animation = function (options) {
 
     options = options || {};
@@ -10764,8 +10991,9 @@ ZRender.prototype = {
      */
     addHover: function (el, style) {
         if (this.painter.addHover) {
-            this.painter.addHover(el, style);
+            var elMirror = this.painter.addHover(el, style);
             this.refreshHover();
+            return elMirror;
         }
     },
 
@@ -11877,7 +12105,7 @@ PathProxy.prototype = {
         this._ctx && this._ctx.arc(cx, cy, r, startAngle, endAngle, anticlockwise);
 
         this._xi = mathCos$1(endAngle) * r + cx;
-        this._yi = mathSin$1(endAngle) * r + cx;
+        this._yi = mathSin$1(endAngle) * r + cy;
         return this;
     },
 
@@ -12467,21 +12695,6 @@ function containStroke$1(x0, y0, x1, y1, lineWidth, x, y) {
     return _s <= _l / 2 * _l / 2;
 }
 
-/**
- * 三次贝塞尔曲线描边包含判断
- * @param  {number}  x0
- * @param  {number}  y0
- * @param  {number}  x1
- * @param  {number}  y1
- * @param  {number}  x2
- * @param  {number}  y2
- * @param  {number}  x3
- * @param  {number}  y3
- * @param  {number}  lineWidth
- * @param  {number}  x
- * @param  {number}  y
- * @return {boolean}
- */
 function containStroke$2(x0, y0, x1, y1, x2, y2, x3, y3, lineWidth, x, y) {
     if (lineWidth === 0) {
         return false;
@@ -12503,19 +12716,6 @@ function containStroke$2(x0, y0, x1, y1, x2, y2, x3, y3, lineWidth, x, y) {
     return d <= _l / 2;
 }
 
-/**
- * 二次贝塞尔曲线描边包含判断
- * @param  {number}  x0
- * @param  {number}  y0
- * @param  {number}  x1
- * @param  {number}  y1
- * @param  {number}  x2
- * @param  {number}  y2
- * @param  {number}  lineWidth
- * @param  {number}  x
- * @param  {number}  y
- * @return {boolean}
- */
 function containStroke$3(x0, y0, x1, y1, x2, y2, lineWidth, x, y) {
     if (lineWidth === 0) {
         return false;
@@ -13121,14 +13321,34 @@ Path.prototype = {
             this.path.rebuildPath(ctx);
         }
 
-        hasFill && path.fill(ctx);
+        if (hasFill) {
+            if (style.fillOpacity != null) {
+                var originalGlobalAlpha = ctx.globalAlpha;
+                ctx.globalAlpha = style.fillOpacity * style.opacity;
+                path.fill(ctx);
+                ctx.globalAlpha = originalGlobalAlpha;
+            }
+            else {
+                path.fill(ctx);
+            }
+        }
 
         if (lineDash && ctxLineDash) {
             ctx.setLineDash(lineDash);
             ctx.lineDashOffset = lineDashOffset;
         }
 
-        hasStroke && path.stroke(ctx);
+        if (hasStroke) {
+            if (style.strokeOpacity != null) {
+                var originalGlobalAlpha = ctx.globalAlpha;
+                ctx.globalAlpha = style.strokeOpacity * style.opacity;
+                path.stroke(ctx);
+                ctx.globalAlpha = originalGlobalAlpha;
+            }
+            else {
+                path.stroke(ctx);
+            }
+        }
 
         if (lineDash && ctxLineDash) {
             // PENDING
@@ -13139,7 +13359,7 @@ Path.prototype = {
         // Draw rect text
         if (style.text != null) {
             // Only restore transform when needs draw text.
-            this.restoreTransform(ctx);    
+            this.restoreTransform(ctx);
             this.drawRectText(ctx, this.getBoundingRect());
         }
     },
@@ -13248,7 +13468,7 @@ Path.prototype = {
             this._rect = null;
         }
 
-        this.__dirty = true;
+        this.__dirty = this.__dirtyText = true;
 
         this.__zr && this.__zr.refresh();
 
@@ -13459,12 +13679,6 @@ var transformPath = function (path, m) {
     }
 };
 
-// command chars
-var cc = [
-    'm', 'M', 'l', 'L', 'v', 'V', 'h', 'H', 'z', 'Z',
-    'c', 'C', 'q', 'Q', 't', 'T', 's', 'S', 'a', 'A'
-];
-
 var mathSqrt = Math.sqrt;
 var mathSin = Math.sin;
 var mathCos = Math.cos;
@@ -13533,51 +13747,77 @@ function processArc(x1, y1, x2, y2, fa, fs, rx, ry, psiDeg, cmd, path) {
     path.addData(cmd, cx, cy, rx, ry, theta, dTheta, psi, fs);
 }
 
+
+var commandReg = /([mlvhzcqtsa])([^mlvhzcqtsa]*)/ig;
+// Consider case:
+// (1) delimiter can be comma or space, where continuous commas
+// or spaces should be seen as one comma.
+// (2) value can be like:
+// '2e-4', 'l.5.9' (ignore 0), 'M-10-10', 'l-2.43e-1,34.9983',
+// 'l-.5E1,54', '121-23-44-11' (no delimiter)
+var numberReg = /-?([0-9]*\.)?[0-9]+([eE]-?[0-9]+)?/g;
+// var valueSplitReg = /[\s,]+/;
+
 function createPathProxyFromString(data) {
     if (!data) {
-        return [];
+        return new PathProxy();
     }
 
-    // command string
-    var cs = data.replace(/-/g, ' -')
-        .replace(/  /g, ' ')
-        .replace(/ /g, ',')
-        .replace(/,,/g, ',');
+    // var data = data.replace(/-/g, ' -')
+    //     .replace(/  /g, ' ')
+    //     .replace(/ /g, ',')
+    //     .replace(/,,/g, ',');
 
-    var n;
+    // var n;
     // create pipes so that we can split the data
-    for (n = 0; n < cc.length; n++) {
-        cs = cs.replace(new RegExp(cc[n], 'g'), '|' + cc[n]);
-    }
+    // for (n = 0; n < cc.length; n++) {
+    //     cs = cs.replace(new RegExp(cc[n], 'g'), '|' + cc[n]);
+    // }
+
+    // data = data.replace(/-/g, ',-');
 
     // create array
-    var arr = cs.split('|');
+    // var arr = cs.split('|');
     // init context point
     var cpx = 0;
     var cpy = 0;
+    var subpathX = cpx;
+    var subpathY = cpy;
+    var prevCmd;
 
     var path = new PathProxy();
     var CMD = PathProxy.CMD;
 
-    var prevCmd;
-    for (n = 1; n < arr.length; n++) {
-        var str = arr[n];
-        var c = str.charAt(0);
-        var off = 0;
-        var p = str.slice(1).replace(/e,-/g, 'e-').split(',');
+    // commandReg.lastIndex = 0;
+    // var cmdResult;
+    // while ((cmdResult = commandReg.exec(data)) != null) {
+    //     var cmdStr = cmdResult[1];
+    //     var cmdContent = cmdResult[2];
+
+    var cmdList = data.match(commandReg);
+    for (var l = 0; l < cmdList.length; l++) {
+        var cmdText = cmdList[l];
+        var cmdStr = cmdText.charAt(0);
+
         var cmd;
 
-        if (p.length > 0 && p[0] === '') {
-            p.shift();
-        }
+        // String#split is faster a little bit than String#replace or RegExp#exec.
+        // var p = cmdContent.split(valueSplitReg);
+        // var pLen = 0;
+        // for (var i = 0; i < p.length; i++) {
+        //     // '' and other invalid str => NaN
+        //     var val = parseFloat(p[i]);
+        //     !isNaN(val) && (p[pLen++] = val);
+        // }
 
-        for (var i = 0; i < p.length; i++) {
+        var p = cmdText.match(numberReg) || [];
+        var pLen = p.length;
+        for (var i = 0; i < pLen; i++) {
             p[i] = parseFloat(p[i]);
         }
-        while (off < p.length && !isNaN(p[off])) {
-            if (isNaN(p[0])) {
-                break;
-            }
+
+        var off = 0;
+        while (off < pLen) {
             var ctlPtx;
             var ctlPty;
 
@@ -13591,7 +13831,7 @@ function createPathProxyFromString(data) {
             var y1 = cpy;
 
             // convert l, H, h, V, and v to L
-            switch (c) {
+            switch (cmdStr) {
                 case 'l':
                     cpx += p[off++];
                     cpy += p[off++];
@@ -13609,14 +13849,18 @@ function createPathProxyFromString(data) {
                     cpy += p[off++];
                     cmd = CMD.M;
                     path.addData(cmd, cpx, cpy);
-                    c = 'l';
+                    subpathX = cpx;
+                    subpathY = cpy;
+                    cmdStr = 'l';
                     break;
                 case 'M':
                     cpx = p[off++];
                     cpy = p[off++];
                     cmd = CMD.M;
                     path.addData(cmd, cpx, cpy);
-                    c = 'L';
+                    subpathX = cpx;
+                    subpathY = cpy;
+                    cmdStr = 'L';
                     break;
                 case 'h':
                     cpx += p[off++];
@@ -13766,9 +14010,12 @@ function createPathProxyFromString(data) {
             }
         }
 
-        if (c === 'z' || c === 'Z') {
+        if (cmdStr === 'z' || cmdStr === 'Z') {
             cmd = CMD.Z;
             path.addData(cmd);
+            // z may be in the middle of the path.
+            cpx = subpathX;
+            cpy = subpathY;
         }
 
         prevCmd = cmd;
@@ -13865,6 +14112,1492 @@ var path = (Object.freeze || Object)({
 	mergePath: mergePath
 });
 
+var Text = function (opts) { // jshint ignore:line
+    Displayable.call(this, opts);
+};
+
+Text.prototype = {
+
+    constructor: Text,
+
+    type: 'text',
+
+    brush: function (ctx, prevEl) {
+        var style = this.style;
+
+        // Optimize, avoid normalize every time.
+        this.__dirty && normalizeTextStyle(style, true);
+
+        // Use props with prefix 'text'.
+        style.fill = style.stroke = style.shadowBlur = style.shadowColor =
+            style.shadowOffsetX = style.shadowOffsetY = null;
+
+        var text = style.text;
+        // Convert to string
+        text != null && (text += '');
+
+        // Do not apply style.bind in Text node. Because the real bind job
+        // is in textHelper.renderText, and performance of text render should
+        // be considered.
+        // style.bind(ctx, this, prevEl);
+
+        if (!needDrawText(text, style)) {
+            return;
+        }
+
+        this.setTransform(ctx);
+
+        renderText(this, ctx, text, style, null, prevEl);
+
+        this.restoreTransform(ctx);
+    },
+
+    getBoundingRect: function () {
+        var style = this.style;
+
+        // Optimize, avoid normalize every time.
+        this.__dirty && normalizeTextStyle(style, true);
+
+        if (!this._rect) {
+            var text = style.text;
+            text != null ? (text += '') : (text = '');
+
+            var rect = getBoundingRect(
+                style.text + '',
+                style.font,
+                style.textAlign,
+                style.textVerticalAlign,
+                style.textPadding,
+                style.rich
+            );
+
+            rect.x += style.x || 0;
+            rect.y += style.y || 0;
+
+            if (getStroke(style.textStroke, style.textStrokeWidth)) {
+                var w = style.textStrokeWidth;
+                rect.x -= w / 2;
+                rect.y -= w / 2;
+                rect.width += w;
+                rect.height += w;
+            }
+
+            this._rect = rect;
+        }
+
+        return this._rect;
+    }
+};
+
+inherits(Text, Displayable);
+
+/**
+ * 圆形
+ * @module zrender/shape/Circle
+ */
+
+var Circle = Path.extend({
+
+    type: 'circle',
+
+    shape: {
+        cx: 0,
+        cy: 0,
+        r: 0
+    },
+
+
+    buildPath: function (ctx, shape, inBundle) {
+        // Better stroking in ShapeBundle
+        // Always do it may have performence issue ( fill may be 2x more cost)
+        if (inBundle) {
+            ctx.moveTo(shape.cx + shape.r, shape.cy);
+        }
+        // else {
+        //     if (ctx.allocate && !ctx.data.length) {
+        //         ctx.allocate(ctx.CMD_MEM_SIZE.A);
+        //     }
+        // }
+        // Better stroking in ShapeBundle
+        // ctx.moveTo(shape.cx + shape.r, shape.cy);
+        ctx.arc(shape.cx, shape.cy, shape.r, 0, Math.PI * 2, true);
+    }
+});
+
+/**
+ * 矩形
+ * @module zrender/graphic/shape/Rect
+ */
+
+var Rect = Path.extend({
+
+    type: 'rect',
+
+    shape: {
+        // 左上、右上、右下、左下角的半径依次为r1、r2、r3、r4
+        // r缩写为1         相当于 [1, 1, 1, 1]
+        // r缩写为[1]       相当于 [1, 1, 1, 1]
+        // r缩写为[1, 2]    相当于 [1, 2, 1, 2]
+        // r缩写为[1, 2, 3] 相当于 [1, 2, 3, 2]
+        r: 0,
+
+        x: 0,
+        y: 0,
+        width: 0,
+        height: 0
+    },
+
+    buildPath: function (ctx, shape) {
+        var x = shape.x;
+        var y = shape.y;
+        var width = shape.width;
+        var height = shape.height;
+        if (!shape.r) {
+            ctx.rect(x, y, width, height);
+        }
+        else {
+            buildPath(ctx, shape);
+        }
+        ctx.closePath();
+        return;
+    }
+});
+
+/**
+ * 椭圆形状
+ * @module zrender/graphic/shape/Ellipse
+ */
+
+var Ellipse = Path.extend({
+
+    type: 'ellipse',
+
+    shape: {
+        cx: 0, cy: 0,
+        rx: 0, ry: 0
+    },
+
+    buildPath: function (ctx, shape) {
+        var k = 0.5522848;
+        var x = shape.cx;
+        var y = shape.cy;
+        var a = shape.rx;
+        var b = shape.ry;
+        var ox = a * k; // 水平控制点偏移量
+        var oy = b * k; // 垂直控制点偏移量
+        // 从椭圆的左端点开始顺时针绘制四条三次贝塞尔曲线
+        ctx.moveTo(x - a, y);
+        ctx.bezierCurveTo(x - a, y - oy, x - ox, y - b, x, y - b);
+        ctx.bezierCurveTo(x + ox, y - b, x + a, y - oy, x + a, y);
+        ctx.bezierCurveTo(x + a, y + oy, x + ox, y + b, x, y + b);
+        ctx.bezierCurveTo(x - ox, y + b, x - a, y + oy, x - a, y);
+        ctx.closePath();
+    }
+});
+
+/**
+ * 直线
+ * @module zrender/graphic/shape/Line
+ */
+
+var Line = Path.extend({
+
+    type: 'line',
+
+    shape: {
+        // Start point
+        x1: 0,
+        y1: 0,
+        // End point
+        x2: 0,
+        y2: 0,
+
+        percent: 1
+    },
+
+    style: {
+        stroke: '#000',
+        fill: null
+    },
+
+    buildPath: function (ctx, shape) {
+        var x1 = shape.x1;
+        var y1 = shape.y1;
+        var x2 = shape.x2;
+        var y2 = shape.y2;
+        var percent = shape.percent;
+
+        if (percent === 0) {
+            return;
+        }
+
+        ctx.moveTo(x1, y1);
+
+        if (percent < 1) {
+            x2 = x1 * (1 - percent) + x2 * percent;
+            y2 = y1 * (1 - percent) + y2 * percent;
+        }
+        ctx.lineTo(x2, y2);
+    },
+
+    /**
+     * Get point at percent
+     * @param  {number} percent
+     * @return {Array.<number>}
+     */
+    pointAt: function (p) {
+        var shape = this.shape;
+        return [
+            shape.x1 * (1 - p) + shape.x2 * p,
+            shape.y1 * (1 - p) + shape.y2 * p
+        ];
+    }
+});
+
+/**
+ * Catmull-Rom spline 插值折线
+ * @module zrender/shape/util/smoothSpline
+ * @author pissang (https://www.github.com/pissang)
+ *         Kener (@Kener-林峰, kener.linfeng@gmail.com)
+ *         errorrik (errorrik@gmail.com)
+ */
+
+function interpolate(p0, p1, p2, p3, t, t2, t3) {
+    var v0 = (p2 - p0) * 0.5;
+    var v1 = (p3 - p1) * 0.5;
+    return (2 * (p1 - p2) + v0 + v1) * t3
+            + (-3 * (p1 - p2) - 2 * v0 - v1) * t2
+            + v0 * t + p1;
+}
+
+/**
+ * @alias module:zrender/shape/util/smoothSpline
+ * @param {Array} points 线段顶点数组
+ * @param {boolean} isLoop
+ * @return {Array}
+ */
+var smoothSpline = function (points, isLoop) {
+    var len$$1 = points.length;
+    var ret = [];
+
+    var distance$$1 = 0;
+    for (var i = 1; i < len$$1; i++) {
+        distance$$1 += distance(points[i - 1], points[i]);
+    }
+
+    var segs = distance$$1 / 2;
+    segs = segs < len$$1 ? len$$1 : segs;
+    for (var i = 0; i < segs; i++) {
+        var pos = i / (segs - 1) * (isLoop ? len$$1 : len$$1 - 1);
+        var idx = Math.floor(pos);
+
+        var w = pos - idx;
+
+        var p0;
+        var p1 = points[idx % len$$1];
+        var p2;
+        var p3;
+        if (!isLoop) {
+            p0 = points[idx === 0 ? idx : idx - 1];
+            p2 = points[idx > len$$1 - 2 ? len$$1 - 1 : idx + 1];
+            p3 = points[idx > len$$1 - 3 ? len$$1 - 1 : idx + 2];
+        }
+        else {
+            p0 = points[(idx - 1 + len$$1) % len$$1];
+            p2 = points[(idx + 1) % len$$1];
+            p3 = points[(idx + 2) % len$$1];
+        }
+
+        var w2 = w * w;
+        var w3 = w * w2;
+
+        ret.push([
+            interpolate(p0[0], p1[0], p2[0], p3[0], w, w2, w3),
+            interpolate(p0[1], p1[1], p2[1], p3[1], w, w2, w3)
+        ]);
+    }
+    return ret;
+};
+
+/**
+ * 贝塞尔平滑曲线
+ * @module zrender/shape/util/smoothBezier
+ * @author pissang (https://www.github.com/pissang)
+ *         Kener (@Kener-林峰, kener.linfeng@gmail.com)
+ *         errorrik (errorrik@gmail.com)
+ */
+
+var smoothBezier = function (points, smooth, isLoop, constraint) {
+    var cps = [];
+
+    var v = [];
+    var v1 = [];
+    var v2 = [];
+    var prevPoint;
+    var nextPoint;
+
+    var min$$1, max$$1;
+    if (constraint) {
+        min$$1 = [Infinity, Infinity];
+        max$$1 = [-Infinity, -Infinity];
+        for (var i = 0, len$$1 = points.length; i < len$$1; i++) {
+            min(min$$1, min$$1, points[i]);
+            max(max$$1, max$$1, points[i]);
+        }
+        // 与指定的包围盒做并集
+        min(min$$1, min$$1, constraint[0]);
+        max(max$$1, max$$1, constraint[1]);
+    }
+
+    for (var i = 0, len$$1 = points.length; i < len$$1; i++) {
+        var point = points[i];
+
+        if (isLoop) {
+            prevPoint = points[i ? i - 1 : len$$1 - 1];
+            nextPoint = points[(i + 1) % len$$1];
+        }
+        else {
+            if (i === 0 || i === len$$1 - 1) {
+                cps.push(clone$1(points[i]));
+                continue;
+            }
+            else {
+                prevPoint = points[i - 1];
+                nextPoint = points[i + 1];
+            }
+        }
+
+        sub(v, nextPoint, prevPoint);
+
+        // use degree to scale the handle length
+        scale(v, v, smooth);
+
+        var d0 = distance(point, prevPoint);
+        var d1 = distance(point, nextPoint);
+        var sum = d0 + d1;
+        if (sum !== 0) {
+            d0 /= sum;
+            d1 /= sum;
+        }
+
+        scale(v1, v, -d0);
+        scale(v2, v, d1);
+        var cp0 = add([], point, v1);
+        var cp1 = add([], point, v2);
+        if (constraint) {
+            max(cp0, cp0, min$$1);
+            min(cp0, cp0, max$$1);
+            max(cp1, cp1, min$$1);
+            min(cp1, cp1, max$$1);
+        }
+        cps.push(cp0);
+        cps.push(cp1);
+    }
+
+    if (isLoop) {
+        cps.push(cps.shift());
+    }
+
+    return cps;
+};
+
+function buildPath$1(ctx, shape, closePath) {
+    var points = shape.points;
+    var smooth = shape.smooth;
+    if (points && points.length >= 2) {
+        if (smooth && smooth !== 'spline') {
+            var controlPoints = smoothBezier(
+                points, smooth, closePath, shape.smoothConstraint
+            );
+
+            ctx.moveTo(points[0][0], points[0][1]);
+            var len = points.length;
+            for (var i = 0; i < (closePath ? len : len - 1); i++) {
+                var cp1 = controlPoints[i * 2];
+                var cp2 = controlPoints[i * 2 + 1];
+                var p = points[(i + 1) % len];
+                ctx.bezierCurveTo(
+                    cp1[0], cp1[1], cp2[0], cp2[1], p[0], p[1]
+                );
+            }
+        }
+        else {
+            if (smooth === 'spline') {
+                points = smoothSpline(points, closePath);
+            }
+
+            ctx.moveTo(points[0][0], points[0][1]);
+            for (var i = 1, l = points.length; i < l; i++) {
+                ctx.lineTo(points[i][0], points[i][1]);
+            }
+        }
+
+        closePath && ctx.closePath();
+    }
+}
+
+/**
+ * 多边形
+ * @module zrender/shape/Polygon
+ */
+
+var Polygon = Path.extend({
+
+    type: 'polygon',
+
+    shape: {
+        points: null,
+
+        smooth: false,
+
+        smoothConstraint: null
+    },
+
+    buildPath: function (ctx, shape) {
+        buildPath$1(ctx, shape, true);
+    }
+});
+
+/**
+ * @module zrender/graphic/shape/Polyline
+ */
+
+var Polyline = Path.extend({
+
+    type: 'polyline',
+
+    shape: {
+        points: null,
+
+        smooth: false,
+
+        smoothConstraint: null
+    },
+
+    style: {
+        stroke: '#000',
+
+        fill: null
+    },
+
+    buildPath: function (ctx, shape) {
+        buildPath$1(ctx, shape, false);
+    }
+});
+
+/**
+ * @param {Array.<Object>} colorStops
+ */
+var Gradient = function (colorStops) {
+
+    this.colorStops = colorStops || [];
+
+};
+
+Gradient.prototype = {
+
+    constructor: Gradient,
+
+    addColorStop: function (offset, color) {
+        this.colorStops.push({
+
+            offset: offset,
+
+            color: color
+        });
+    }
+
+};
+
+var LinearGradient = function (x, y, x2, y2, colorStops, globalCoord) {
+    // Should do nothing more in this constructor. Because gradient can be
+    // declard by `color: {type: 'linear', colorStops: ...}`, where
+    // this constructor will not be called.
+
+    this.x = x == null ? 0 : x;
+
+    this.y = y == null ? 0 : y;
+
+    this.x2 = x2 == null ? 1 : x2;
+
+    this.y2 = y2 == null ? 0 : y2;
+
+    // Can be cloned
+    this.type = 'linear';
+
+    // If use global coord
+    this.global = globalCoord || false;
+
+    Gradient.call(this, colorStops);
+};
+
+LinearGradient.prototype = {
+
+    constructor: LinearGradient
+};
+
+inherits(LinearGradient, Gradient);
+
+var DILIMITER_REG = /[\s,]+/;
+
+/**
+ * For big svg string, this method might be time consuming.
+ *
+ * @param {string} svg xml string
+ * @return {Object} xml root.
+ */
+function parseXML(svg) {
+    if (isString(svg)) {
+        var parser = new DOMParser();
+        svg = parser.parseFromString(svg, 'text/xml');
+    }
+
+    // Document node. If using $.get, doc node may be input.
+    if (svg.nodeType === 9) {
+        svg = svg.firstChild;
+    }
+    // nodeName of <!DOCTYPE svg> is also 'svg'.
+    while (svg.nodeName.toLowerCase() !== 'svg' || svg.nodeType !== 1) {
+        svg = svg.nextSibling;
+    }
+
+    return svg;
+}
+
+function SVGParser() {
+    this._defs = {};
+    this._root = null;
+
+    this._isDefine = false;
+    this._isText = false;
+}
+
+SVGParser.prototype.parse = function (xml, opt) {
+    opt = opt || {};
+
+    var svg = parseXML(xml);
+
+    if (!svg) {
+        throw new Error('Illegal svg');
+    }
+
+    var root = new Group();
+    this._root = root;
+    // parse view port
+    var viewBox = svg.getAttribute('viewBox') || '';
+
+    // If width/height not specified, means "100%" of `opt.width/height`.
+    // TODO: Other percent value not supported yet.
+    var width = parseFloat(svg.getAttribute('width') || opt.width);
+    var height = parseFloat(svg.getAttribute('height') || opt.height);
+    // If width/height not specified, set as null for output.
+    isNaN(width) && (width = null);
+    isNaN(height) && (height = null);
+
+    // Apply inline style on svg element.
+    parseAttributes(svg, root, null, true);
+
+    var child = svg.firstChild;
+    while (child) {
+        this._parseNode(child, root);
+        child = child.nextSibling;
+    }
+
+    var viewBoxRect;
+    var viewBoxTransform;
+
+    if (viewBox) {
+        var viewBoxArr = trim(viewBox).split(DILIMITER_REG);
+        // Some invalid case like viewBox: 'none'.
+        if (viewBoxArr.length >= 4) {
+            viewBoxRect = {
+                x: parseFloat(viewBoxArr[0] || 0),
+                y: parseFloat(viewBoxArr[1] || 0),
+                width: parseFloat(viewBoxArr[2]),
+                height: parseFloat(viewBoxArr[3])
+            };
+        }
+    }
+
+    if (viewBoxRect && width != null && height != null) {
+        viewBoxTransform = makeViewBoxTransform(viewBoxRect, width, height);
+
+        if (!opt.ignoreViewBox) {
+            // If set transform on the output group, it probably bring trouble when
+            // some users only intend to show the clipped content inside the viewBox,
+            // but not intend to transform the output group. So we keep the output
+            // group no transform. If the user intend to use the viewBox as a
+            // camera, just set `opt.ignoreViewBox` as `true` and set transfrom
+            // manually according to the viewBox info in the output of this method.
+            var elRoot = root;
+            root = new Group();
+            root.add(elRoot);
+            elRoot.scale = viewBoxTransform.scale.slice();
+            elRoot.position = viewBoxTransform.position.slice();
+        }
+    }
+
+    // Some shapes might be overflow the viewport, which should be
+    // clipped despite whether the viewBox is used, as the SVG does.
+    if (!opt.ignoreRootClip && width != null && height != null) {
+        root.setClipPath(new Rect({
+            shape: {x: 0, y: 0, width: width, height: height}
+        }));
+    }
+
+    // Set width/height on group just for output the viewport size.
+    return {
+        root: root,
+        width: width,
+        height: height,
+        viewBoxRect: viewBoxRect,
+        viewBoxTransform: viewBoxTransform
+    };
+};
+
+SVGParser.prototype._parseNode = function (xmlNode, parentGroup) {
+
+    var nodeName = xmlNode.nodeName.toLowerCase();
+
+    // TODO
+    // support <style>...</style> in svg, where nodeName is 'style',
+    // CSS classes is defined globally wherever the style tags are declared.
+
+    if (nodeName === 'defs') {
+        // define flag
+        this._isDefine = true;
+    }
+    else if (nodeName === 'text') {
+        this._isText = true;
+    }
+
+    var el;
+    if (this._isDefine) {
+        var parser = defineParsers[nodeName];
+        if (parser) {
+            var def = parser.call(this, xmlNode);
+            var id = xmlNode.getAttribute('id');
+            if (id) {
+                this._defs[id] = def;
+            }
+        }
+    }
+    else {
+        var parser = nodeParsers[nodeName];
+        if (parser) {
+            el = parser.call(this, xmlNode, parentGroup);
+            parentGroup.add(el);
+        }
+    }
+
+    var child = xmlNode.firstChild;
+    while (child) {
+        if (child.nodeType === 1) {
+            this._parseNode(child, el);
+        }
+        // Is text
+        if (child.nodeType === 3 && this._isText) {
+            this._parseText(child, el);
+        }
+        child = child.nextSibling;
+    }
+
+    // Quit define
+    if (nodeName === 'defs') {
+        this._isDefine = false;
+    }
+    else if (nodeName === 'text') {
+        this._isText = false;
+    }
+};
+
+SVGParser.prototype._parseText = function (xmlNode, parentGroup) {
+    if (xmlNode.nodeType === 1) {
+        var dx = xmlNode.getAttribute('dx') || 0;
+        var dy = xmlNode.getAttribute('dy') || 0;
+        this._textX += parseFloat(dx);
+        this._textY += parseFloat(dy);
+    }
+
+    var text = new Text({
+        style: {
+            text: xmlNode.textContent,
+            transformText: true
+        },
+        position: [this._textX || 0, this._textY || 0]
+    });
+
+    inheritStyle(parentGroup, text);
+    parseAttributes(xmlNode, text, this._defs);
+
+    var fontSize = text.style.fontSize;
+    if (fontSize && fontSize < 9) {
+        // PENDING
+        text.style.fontSize = 9;
+        text.scale = text.scale || [1, 1];
+        text.scale[0] *= fontSize / 9;
+        text.scale[1] *= fontSize / 9;
+    }
+
+    var rect = text.getBoundingRect();
+    this._textX += rect.width;
+
+    parentGroup.add(text);
+
+    return text;
+};
+
+var nodeParsers = {
+    'g': function(xmlNode, parentGroup) {
+        var g = new Group();
+        inheritStyle(parentGroup, g);
+        parseAttributes(xmlNode, g, this._defs);
+
+        return g;
+    },
+    'rect': function(xmlNode, parentGroup) {
+        var rect = new Rect();
+        inheritStyle(parentGroup, rect);
+        parseAttributes(xmlNode, rect, this._defs);
+
+        rect.setShape({
+            x: parseFloat(xmlNode.getAttribute('x') || 0),
+            y: parseFloat(xmlNode.getAttribute('y') || 0),
+            width: parseFloat(xmlNode.getAttribute('width') || 0),
+            height: parseFloat(xmlNode.getAttribute('height') || 0)
+        });
+
+        // console.log(xmlNode.getAttribute('transform'));
+        // console.log(rect.transform);
+
+        return rect;
+    },
+    'circle': function(xmlNode, parentGroup) {
+        var circle = new Circle();
+        inheritStyle(parentGroup, circle);
+        parseAttributes(xmlNode, circle, this._defs);
+
+        circle.setShape({
+            cx: parseFloat(xmlNode.getAttribute('cx') || 0),
+            cy: parseFloat(xmlNode.getAttribute('cy') || 0),
+            r: parseFloat(xmlNode.getAttribute('r') || 0)
+        });
+
+        return circle;
+    },
+    'line': function(xmlNode, parentGroup) {
+        var line = new Line();
+        inheritStyle(parentGroup, line);
+        parseAttributes(xmlNode, line, this._defs);
+
+        line.setShape({
+            x1: parseFloat(xmlNode.getAttribute('x1') || 0),
+            y1: parseFloat(xmlNode.getAttribute('y1') || 0),
+            x2: parseFloat(xmlNode.getAttribute('x2') || 0),
+            y2: parseFloat(xmlNode.getAttribute('y2') || 0)
+        });
+
+        return line;
+    },
+    'ellipse': function(xmlNode, parentGroup) {
+        var ellipse = new Ellipse();
+        inheritStyle(parentGroup, ellipse);
+        parseAttributes(xmlNode, ellipse, this._defs);
+
+        ellipse.setShape({
+            cx: parseFloat(xmlNode.getAttribute('cx') || 0),
+            cy: parseFloat(xmlNode.getAttribute('cy') || 0),
+            rx: parseFloat(xmlNode.getAttribute('rx') || 0),
+            ry: parseFloat(xmlNode.getAttribute('ry') || 0)
+        });
+        return ellipse;
+    },
+    'polygon': function(xmlNode, parentGroup) {
+        var points = xmlNode.getAttribute('points');
+        if (points) {
+            points = parsePoints(points);
+        }
+        var polygon = new Polygon({
+            shape: {
+                points: points || []
+            }
+        });
+
+        inheritStyle(parentGroup, polygon);
+        parseAttributes(xmlNode, polygon, this._defs);
+
+        return polygon;
+    },
+    'polyline': function(xmlNode, parentGroup) {
+        var path = new Path();
+        inheritStyle(parentGroup, path);
+        parseAttributes(xmlNode, path, this._defs);
+
+        var points = xmlNode.getAttribute('points');
+        if (points) {
+            points = parsePoints(points);
+        }
+        var polyline = new Polyline({
+            shape: {
+                points: points || []
+            }
+        });
+
+        return polyline;
+    },
+    'image': function(xmlNode, parentGroup) {
+        var img = new ZImage();
+        inheritStyle(parentGroup, img);
+        parseAttributes(xmlNode, img, this._defs);
+
+        img.setStyle({
+            image: xmlNode.getAttribute('xlink:href'),
+            x: xmlNode.getAttribute('x'),
+            y: xmlNode.getAttribute('y'),
+            width: xmlNode.getAttribute('width'),
+            height: xmlNode.getAttribute('height')
+        });
+
+        return img;
+    },
+    'text': function(xmlNode, parentGroup) {
+        var x = xmlNode.getAttribute('x') || 0;
+        var y = xmlNode.getAttribute('y') || 0;
+        var dx = xmlNode.getAttribute('dx') || 0;
+        var dy = xmlNode.getAttribute('dy') || 0;
+
+        this._textX = parseFloat(x) + parseFloat(dx);
+        this._textY = parseFloat(y) + parseFloat(dy);
+
+        var g = new Group();
+        inheritStyle(parentGroup, g);
+        parseAttributes(xmlNode, g, this._defs);
+
+        return g;
+    },
+    'tspan': function (xmlNode, parentGroup) {
+        var x = xmlNode.getAttribute('x');
+        var y = xmlNode.getAttribute('y');
+        if (x != null) {
+            // new offset x
+            this._textX = parseFloat(x);
+        }
+        if (y != null) {
+            // new offset y
+            this._textY = parseFloat(y);
+        }
+        var dx = xmlNode.getAttribute('dx') || 0;
+        var dy = xmlNode.getAttribute('dy') || 0;
+
+        var g = new Group();
+
+        inheritStyle(parentGroup, g);
+        parseAttributes(xmlNode, g, this._defs);
+
+
+        this._textX += dx;
+        this._textY += dy;
+
+        return g;
+    },
+    'path': function(xmlNode, parentGroup) {
+        // TODO svg fill rule
+        // https://developer.mozilla.org/en-US/docs/Web/SVG/Attribute/fill-rule
+        // path.style.globalCompositeOperation = 'xor';
+        var d = xmlNode.getAttribute('d') || '';
+
+        // Performance sensitive.
+
+        var path = createFromString(d);
+
+        inheritStyle(parentGroup, path);
+        parseAttributes(xmlNode, path, this._defs);
+
+        return path;
+    }
+};
+
+var defineParsers = {
+
+    'lineargradient': function(xmlNode) {
+        var x1 = parseInt(xmlNode.getAttribute('x1') || 0);
+        var y1 = parseInt(xmlNode.getAttribute('y1') || 0);
+        var x2 = parseInt(xmlNode.getAttribute('x2') || 10);
+        var y2 = parseInt(xmlNode.getAttribute('y2') || 0);
+
+        var gradient = new LinearGradient(x1, y1, x2, y2);
+
+        _parseGradientColorStops(xmlNode, gradient);
+
+        return gradient;
+    },
+
+    'radialgradient': function(xmlNode) {
+
+    }
+};
+
+function _parseGradientColorStops(xmlNode, gradient) {
+
+    var stop = xmlNode.firstChild;
+
+    while (stop) {
+        if (stop.nodeType === 1) {
+            var offset = stop.getAttribute('offset');
+            if (offset.indexOf('%') > 0) {  // percentage
+                offset = parseInt(offset) / 100;
+            }
+            else if(offset) {    // number from 0 to 1
+                offset = parseFloat(offset);
+            }
+            else {
+                offset = 0;
+            }
+
+            var stopColor = stop.getAttribute('stop-color') || '#000000';
+
+            gradient.addColorStop(offset, stopColor);
+        }
+        stop = stop.nextSibling;
+    }
+}
+
+function inheritStyle(parent, child) {
+    if (parent && parent.__inheritedStyle) {
+        if (!child.__inheritedStyle) {
+            child.__inheritedStyle = {};
+        }
+        defaults(child.__inheritedStyle, parent.__inheritedStyle);
+    }
+}
+
+function parsePoints(pointsString) {
+    var list = trim(pointsString).split(DILIMITER_REG);
+    var points = [];
+
+    for (var i = 0; i < list.length; i+=2) {
+        var x = parseFloat(list[i]);
+        var y = parseFloat(list[i+1]);
+        points.push([x, y]);
+    }
+    return points;
+}
+
+var attributesMap = {
+    'fill': 'fill',
+    'stroke': 'stroke',
+    'stroke-width': 'lineWidth',
+    'opacity': 'opacity',
+    'fill-opacity': 'fillOpacity',
+    'stroke-opacity': 'strokeOpacity',
+    'stroke-dasharray': 'lineDash',
+    'stroke-dashoffset': 'lineDashOffset',
+    'stroke-linecap': 'lineCap',
+    'stroke-linejoin': 'lineJoin',
+    'stroke-miterlimit': 'miterLimit',
+    'font-family': 'fontFamily',
+    'font-size': 'fontSize',
+    'font-style': 'fontStyle',
+    'font-weight': 'fontWeight',
+
+    'text-align': 'textAlign',
+    'alignment-baseline': 'textBaseline'
+};
+
+function parseAttributes(xmlNode, el, defs, onlyInlineStyle) {
+    var zrStyle = el.__inheritedStyle || {};
+    var isTextEl = el.type === 'text';
+
+    // TODO Shadow
+    if (xmlNode.nodeType === 1) {
+        parseTransformAttribute(xmlNode, el);
+
+        extend(zrStyle, parseStyleAttribute(xmlNode));
+
+        if (!onlyInlineStyle) {
+            for (var svgAttrName in attributesMap) {
+                if (attributesMap.hasOwnProperty(svgAttrName)) {
+                    var attrValue = xmlNode.getAttribute(svgAttrName);
+                    if (attrValue != null) {
+                        zrStyle[attributesMap[svgAttrName]] = attrValue;
+                    }
+                }
+            }
+        }
+    }
+
+    var elFillProp = isTextEl ? 'textFill' : 'fill';
+    var elStrokeProp = isTextEl ? 'textStroke' : 'stroke';
+
+    el.style = el.style || new Style();
+    var elStyle = el.style;
+
+    zrStyle.fill != null && elStyle.set(elFillProp, getPaint(zrStyle.fill, defs));
+    zrStyle.stroke != null && elStyle.set(elStrokeProp, getPaint(zrStyle.stroke, defs));
+
+    each([
+        'lineWidth', 'opacity', 'fillOpacity', 'strokeOpacity', 'miterLimit', 'fontSize'
+    ], function (propName) {
+        var elPropName = (propName === 'lineWidth' && isTextEl) ? 'textStrokeWidth' : propName;
+        zrStyle[propName] != null && elStyle.set(elPropName, parseFloat(zrStyle[propName]));
+    });
+
+    if (!zrStyle.textBaseline || zrStyle.textBaseline === 'auto') {
+        zrStyle.textBaseline = 'alphabetic';
+    }
+    if (zrStyle.textBaseline === 'alphabetic') {
+        zrStyle.textBaseline = 'bottom';
+    }
+    if (zrStyle.textAlign === 'start') {
+        zrStyle.textAlign = 'left';
+    }
+    if (zrStyle.textAlign === 'end') {
+        zrStyle.textAlign = 'right';
+    }
+
+    each(['lineDashOffset', 'lineCap', 'lineJoin',
+        'fontWeight', 'fontFamily', 'fontStyle', 'textAlign', 'textBaseline'
+    ], function (propName) {
+        zrStyle[propName] != null && elStyle.set(propName, zrStyle[propName]);
+    });
+
+    if (zrStyle.lineDash) {
+        el.style.lineDash = trim(zrStyle.lineDash).split(DILIMITER_REG);
+    }
+
+    if (elStyle[elStrokeProp] && elStyle[elStrokeProp] !== 'none') {
+        // enable stroke
+        el[elStrokeProp] = true;
+    }
+
+    el.__inheritedStyle = zrStyle;
+}
+
+
+var urlRegex = /url\(\s*#(.*?)\)/;
+function getPaint(str, defs) {
+    // if (str === 'none') {
+    //     return;
+    // }
+    var urlMatch = defs && str && str.match(urlRegex);
+    if (urlMatch) {
+        var url = trim(urlMatch[1]);
+        var def = defs[url];
+        return def;
+    }
+    return str;
+}
+
+var transformRegex = /(translate|scale|rotate|skewX|skewY|matrix)\(([\-\s0-9\.e,]*)\)/g;
+
+function parseTransformAttribute(xmlNode, node) {
+    var transform = xmlNode.getAttribute('transform');
+    if (transform) {
+        transform = transform.replace(/,/g, ' ');
+        var m = null;
+        var transformOps = [];
+        transform.replace(transformRegex, function(str, type, value) {
+            transformOps.push(type, value);
+        });
+        for(var i = transformOps.length - 1; i > 0; i-=2) {
+            var value = transformOps[i];
+            var type = transformOps[i-1];
+            m = m || create$1();
+            switch(type) {
+                case 'translate':
+                    value = trim(value).split(DILIMITER_REG);
+                    translate(m, m, [parseFloat(value[0]), parseFloat(value[1] || 0)]);
+                    break;
+                case 'scale':
+                    value = trim(value).split(DILIMITER_REG);
+                    scale$1(m, m, [parseFloat(value[0]), parseFloat(value[1] || value[0])]);
+                    break;
+                case 'rotate':
+                    value = trim(value).split(DILIMITER_REG);
+                    rotate(m, m, parseFloat(value[0]));
+                    break;
+                case 'skew':
+                    value = trim(value).split(DILIMITER_REG);
+                    console.warn('Skew transform is not supported yet');
+                    break;
+                case 'matrix':
+                    var value = trim(value).split(DILIMITER_REG);
+                    m[0] = parseFloat(value[0]);
+                    m[1] = parseFloat(value[1]);
+                    m[2] = parseFloat(value[2]);
+                    m[3] = parseFloat(value[3]);
+                    m[4] = parseFloat(value[4]);
+                    m[5] = parseFloat(value[5]);
+                    break;
+            }
+        }
+    }
+    node.setLocalTransform(m);
+
+}
+
+// Value may contain space.
+var styleRegex = /([^\s:;]+)\s*:\s*([^:;]+)/g;
+function parseStyleAttribute(xmlNode) {
+    var style = xmlNode.getAttribute('style');
+    var result = {};
+
+    if (!style) {
+        return result;
+    }
+
+    var styleList = {};
+    styleRegex.lastIndex = 0;
+    var styleRegResult;
+    while ((styleRegResult = styleRegex.exec(style)) != null) {
+        styleList[styleRegResult[1]] = styleRegResult[2];
+    }
+
+    for (var svgAttrName in attributesMap) {
+        if (attributesMap.hasOwnProperty(svgAttrName) && styleList[svgAttrName] != null) {
+            result[attributesMap[svgAttrName]] = styleList[svgAttrName];
+        }
+    }
+
+    return result;
+}
+
+/**
+ * @param {Array.<number>} viewBoxRect
+ * @param {number} width
+ * @param {number} height
+ * @return {Object} {scale, position}
+ */
+function makeViewBoxTransform(viewBoxRect, width, height) {
+    var scaleX = width / viewBoxRect.width;
+    var scaleY = height / viewBoxRect.height;
+    var scale = Math.min(scaleX, scaleY);
+    // preserveAspectRatio 'xMidYMid'
+    var viewBoxScale = [scale, scale];
+    var viewBoxPosition = [
+        -(viewBoxRect.x + viewBoxRect.width / 2) * scale + width / 2,
+        -(viewBoxRect.y + viewBoxRect.height / 2) * scale + height / 2
+    ];
+
+    return {
+        scale: viewBoxScale,
+        position: viewBoxPosition
+    };
+}
+
+/**
+ * @param {string|XMLElement} xml
+ * @param {Object} [opt]
+ * @param {number} [opt.width] Default width if svg width not specified or is a percent value.
+ * @param {number} [opt.height] Default height if svg height not specified or is a percent value.
+ * @param {boolean} [opt.ignoreViewBox]
+ * @param {boolean} [opt.ignoreRootClip]
+ * @return {Object} result:
+ * {
+ *     root: Group, The root of the the result tree of zrender shapes,
+ *     width: number, the viewport width of the SVG,
+ *     height: number, the viewport height of the SVG,
+ *     viewBoxRect: {x, y, width, height}, the declared viewBox rect of the SVG, if exists,
+ *     viewBoxTransform: the {scale, position} calculated by viewBox and viewport, is exists.
+ * }
+ */
+function parseSVG(xml, opt) {
+    var parser = new SVGParser();
+    return parser.parse(xml, opt);
+}
+
+// /**
+//  * 动画主控制器
+//  * @config startIndex(0) 开始位置
+//  * @config endIndex(0) 结束位置
+//  * @config duration(1000) 动画间隔
+//  * @config delay(0) 动画延迟时间
+//  * @config loop(true)
+//  * @config gap(0) 循环的间隔时间
+//  * @config onframe
+//  * @config ondestroy(optional)
+//  * @config onrestart(optional)
+//  *
+//  * TODO pause
+//  */
+
+function Clip$2(config) {
+    var conf = config || {};
+    // { loop, startIndex, endIndex, duration, delay, gap, onframe, ondestroy, onrestart }
+    this.onframe = conf.onframe || new Function();
+    this.ondestroy = conf.ondestroy || new Function();
+    this.onrestart = conf.onrestart || new Function();
+
+    this._duration = conf.duration || 1000;
+    this._doneList = [];
+    this._onframeList = [];
+    this._initialized = false;
+    // 延时
+    this._delay = conf.delay || 0;
+    // 是否循环
+    this._loop = !!(conf.loop);
+    this._gap = conf.gap || 0;
+
+    this._startIndex = Object.prototype.toString.call(conf.startIndex) === '[object Number]' ? conf.startIndex : 0;
+    this._endIndex =  Object.prototype.toString.call(conf.endIndex) === '[object Number]' ? conf.endIndex : 0;
+    this._index = 0;
+
+    this._pausedTime = 0;
+    this._paused = false;
+    this._nextTime = 0;
+  }
+Clip$2.prototype = {
+
+    constructor: Clip$2,
+    /**
+     * 开始执行动画
+     * @return {module:zrender/animation/Animator}
+     */
+    start:function() {
+        if (!this._frameCount || this._startIndex >= this._frameCount - 1) {
+        return this._doneCallback()
+        }
+        // // 兼容 zrender animation
+        // // If start after added to animation
+        // if (this.animation) {
+        //   this.animation.addClip(this)
+        // }
+        // // This optimization will help the case that in the upper application
+        // // the view may be refreshed frequently, where animation will be
+        // // called repeatly but nothing changed.
+
+        return this
+    },
+    /**
+     * @return {Array.<module:zrender/animation/Clip>}
+     */
+    getClips:function() {
+        return [this]
+    },
+    /**
+     *
+     * @param {*} globalTime Animation 运行时间
+     * @param {*} deltaTime 两次调用的时间差
+     */
+    step:function(globalTime, deltaTime) {
+        // Set startTime on first step, or _startTime may has milleseconds different between clips
+        // PENDING
+        if (!this._initialized) {
+        this._startTime = globalTime + this._delay;
+        this._index = this._startIndex + 1;
+        this._nextTime = this._startTime + this._duration;
+        this._initialized = true;
+        }
+
+        if (this._paused) {
+        this._pausedTime += deltaTime;
+        return
+        }
+
+        if (globalTime - this._pausedTime >= this._nextTime) {
+        this.onframe(this._index);
+        this._index = this._index + 1;
+        // 如果帧全部播放完
+        if (this._index > this._endIndex) {
+            if (this._loop) {
+            this.restart(globalTime);
+            this._index = this._startIndex;
+            this._nextTime = this._duration + this._startTime;// 上一帧保留时间 + 开始时间
+            // 重新开始周期
+            // 抛出而不是直接调用事件直到 stage.update 后再统一调用这些事件
+            return 'restart'
+            }
+
+            // 动画完成将这个控制器标识为待删除
+            // 在Animation.update中进行批量删除
+            this._needsRemove = true;
+            return 'destroy'
+        } else {
+            this._nextTime = this._nextTime + this._duration;
+        }
+        }
+
+        return null
+    },
+
+    restart:function(globalTime) {
+        this._startTime = globalTime + this._gap;
+        this._pausedTime = 0;
+        this._needsRemove = false;
+    },
+
+    pause:function() {
+        this._paused = true;
+    },
+
+    resume:function() {
+        this._paused = false;
+    },
+    isPaused:function() {
+        return !!this._paused
+    },
+
+    _doneCallback:function() {
+        var doneList = this._doneList;
+        var len = doneList.length;
+        for (var i = 0; i < len; i++) {
+        doneList[i].call(this);
+        }
+    },
+    fire:function(eventType, arg) {
+        eventType = 'on' + eventType;
+        if (this[eventType]) {
+        this[eventType](arg);
+        }
+    }
+};
+
+/**
+ * @alias zrender/graphic/Sprite 
+ * @extends module:zrender/graphic/Displayable
+ * @constructor
+ * @param {Object} opts
+ */
+function ZSprite(opts) {
+    Displayable.call(this, opts);
+}
+
+ZSprite.prototype = {
+
+    constructor: ZSprite,
+    type: 'sprite',
+
+  brush: function(ctx, prevEl) {
+    var style = this.style;
+    var src = style.image;
+    var zr = this.__zr;
+    var _this = this;
+    // Must bind each time
+    style.bind(ctx, this, prevEl);
+
+    style.offset_x = style.offset_x || 0;
+    style.offset_y = style.offset_y || 0;
+    style.numFrames = style.numFrames || 0;
+    style.frame = style.frame || 0;
+
+    this.loop = this.loop || false;
+    this.autoplay = this.autoplay === true;
+    this.sTM = this.sTM || null;
+    this.generate = this.generate !== false;
+
+    var image = this._image = createOrUpdateImage(
+      src,
+      this._image,
+      this,
+      function(image) {
+        // Set the full source image dimensions
+        _this.full_width = image.width;
+        _this.full_height = image.height;
+
+        // If automatic generation is specified
+        if (_this.generate) {
+          var dir, length_full, length_cropped, num_frames, i, duration;
+
+          // Get frame data
+          dir = style.direction || 'x';
+          duration = style.duration || 1000;
+          length_full = (dir === "y") ? _this.full_height : _this.full_width;
+          length_cropped = (dir === "y") ? style.h : style.w;
+
+          if (style.numFrames > 0) {
+            num_frames = style.numFrames;
+          } else {
+            num_frames = length_full / length_cropped;
+            style.numFrames = num_frames;
+          }
+
+          // Create frames based on the specified width, height, direction, offset and duration
+          _this.frames = [];
+          for (i = 0; i < num_frames; i++) {
+            _this.frames.push({
+              x: style.offset_x + (i * (dir === "x" ? style.w : 0)),
+              y: style.offset_y + (i * (dir === "y" ? style.h : 0))
+            });
+          }
+          _this._clip = new Clip$2({
+            loop: _this.loop,
+            startIndex: 0,
+            endIndex: num_frames - 1,
+            duration: duration
+          });
+          _this._clip.onframe = function(frameIndex) {
+            style.frame = frameIndex;
+            _this.dirty(false);
+          };
+          if (_this.autoplay) {
+            _this._clip.start();
+          }
+        }
+        // If animate after added to the zrender
+        if (zr) {
+          zr.animation.addAnimator(_this._clip);
+        }
+        _this.loaded = true;
+        isFunction(_this.onload) && _this.onload();
+        // _this.__zr.refresh()
+      }
+    );
+
+    if (!image || !isImageReady(image)) {
+      return
+    }
+
+    // 设置transform
+    this.setTransform(ctx);
+    if (this.loaded) {
+      // console.log('call brush::::', style.frame, this.frames)
+      this._draw(ctx, style, this.frames[style.frame]);
+    }
+    // Draw rect text
+    if (style.text != null) {
+      // Only restore transform when needs draw text.
+      this.restoreTransform(ctx);
+      this.drawRectText(ctx, this.getBoundingRect());
+    }
+  },
+  _draw:function(ctx, style, frame) {
+    // var _this = this
+    var x = style.x || 0;
+    var y = style.y || 0;
+
+    // If the image has not been loaded or the sprite has no frames, the frame size must be 0 (for clipChildren feature).
+    var fw = style.w;
+    var fh = style.h;
+    if (!frame || this.frame > style.numFrames) {
+      // Do clip with an empty path
+      if (this.clipChildren) {
+        ctx.beginPath();
+        ctx.rect(x, y, 0, 0);
+        ctx.closePath();
+        ctx.clip();
+      }
+      return this
+    }
+    // Draw the current sprite part
+    ctx.drawImage(this._image, frame.x, frame.y, fw, fh, x, y, fw, fh);
+    if (this.strokeWidth > 0) {
+      ctx.lineWidth = this.strokeWidth;
+      ctx.strokeStyle = this.strokeColor;
+      ctx.strokeRect(x, y, fw, fh);
+    }
+  },
+  getBoundingRect:function() {
+    var style = this.style;
+    if (!this._rect) {
+      this._rect = new BoundingRect(
+        style.x || 0, style.y || 0, style.w || 0, style.h || 0
+      );
+    }
+    return this._rect
+  }
+};
+inherits(ZSprite, Displayable);
+
 // CompoundPath to improve performance
 
 var CompoundPath = Path.extend({
@@ -13921,96 +15654,12 @@ var CompoundPath = Path.extend({
 });
 
 /**
- * @alias zrender/graphic/Text
- * @extends module:zrender/graphic/Displayable
- * @constructor
- * @param {Object} opts
- */
-var Text = function (opts) { // jshint ignore:line
-    Displayable.call(this, opts);
-};
-
-Text.prototype = {
-
-    constructor: Text,
-
-    type: 'text',
-
-    brush: function (ctx, prevEl) {
-        var style = this.style;
-
-        // Optimize, avoid normalize every time.
-        this.__dirty && normalizeTextStyle(style, true);
-
-        // Use props with prefix 'text'.
-        style.fill = style.stroke = style.shadowBlur = style.shadowColor =
-            style.shadowOffsetX = style.shadowOffsetY = null;
-
-        var text = style.text;
-        // Convert to string
-        text != null && (text += '');
-
-        // Always bind style
-        style.bind(ctx, this, prevEl);
-
-        if (!needDrawText(text, style)) {
-            return;
-        }
-
-        this.setTransform(ctx);
-
-        renderText(this, ctx, text, style);
-
-        this.restoreTransform(ctx);
-    },
-
-    getBoundingRect: function () {
-        var style = this.style;
-
-        // Optimize, avoid normalize every time.
-        this.__dirty && normalizeTextStyle(style, true);
-
-        if (!this._rect) {
-            var text = style.text;
-            text != null ? (text += '') : (text = '');
-
-            var rect = getBoundingRect(
-                style.text + '',
-                style.font,
-                style.textAlign,
-                style.textVerticalAlign,
-                style.textPadding,
-                style.rich
-            );
-
-            rect.x += style.x || 0;
-            rect.y += style.y || 0;
-
-            if (getStroke(style.textStroke, style.textStrokeWidth)) {
-                var w = style.textStrokeWidth;
-                rect.x -= w / 2;
-                rect.y -= w / 2;
-                rect.width += w;
-                rect.height += w;
-            }
-
-            this._rect = rect;
-        }
-
-        return this._rect;
-    }
-};
-
-inherits(Text, Displayable);
-
-/**
  * Displayable for incremental rendering. It will be rendered in a separate layer
  * IncrementalDisplay have too main methods. `clearDisplayables` and `addDisplayables`
  * addDisplayables will render the added displayables incremetally.
  *
  * It use a not clearFlag to tell the painter don't clear the layer if it's the first element.
  */
-// TODO Style override ?
 function IncrementalDisplayble(opts) {
 
     Displayable.call(this, opts);
@@ -14309,39 +15958,6 @@ var BezierCurve = Path.extend({
 });
 
 /**
- * 圆形
- * @module zrender/shape/Circle
- */
-
-var Circle = Path.extend({
-
-    type: 'circle',
-
-    shape: {
-        cx: 0,
-        cy: 0,
-        r: 0
-    },
-
-
-    buildPath : function (ctx, shape, inBundle) {
-        // Better stroking in ShapeBundle
-        // Always do it may have performence issue ( fill may be 2x more cost)
-        if (inBundle) {
-            ctx.moveTo(shape.cx + shape.r, shape.cy);
-        }
-        // else {
-        //     if (ctx.allocate && !ctx.data.length) {
-        //         ctx.allocate(ctx.CMD_MEM_SIZE.A);
-        //     }
-        // }
-        // Better stroking in ShapeBundle
-        // ctx.moveTo(shape.cx + shape.r, shape.cy);
-        ctx.arc(shape.cx, shape.cy, shape.r, 0, Math.PI * 2, true);
-    }
-});
-
-/**
  * 水滴形状
  * @module zrender/graphic/shape/Droplet
  */
@@ -14378,38 +15994,6 @@ var Droplet = Path.extend({
             x,
             y + a
         );
-        ctx.closePath();
-    }
-});
-
-/**
- * 椭圆形状
- * @module zrender/graphic/shape/Ellipse
- */
-
-var Ellipse = Path.extend({
-
-    type: 'ellipse',
-
-    shape: {
-        cx: 0, cy: 0,
-        rx: 0, ry: 0
-    },
-
-    buildPath: function (ctx, shape) {
-        var k = 0.5522848;
-        var x = shape.cx;
-        var y = shape.cy;
-        var a = shape.rx;
-        var b = shape.ry;
-        var ox = a * k; // 水平控制点偏移量
-        var oy = b * k; // 垂直控制点偏移量
-        // 从椭圆的左端点开始顺时针绘制四条三次贝塞尔曲线
-        ctx.moveTo(x - a, y);
-        ctx.bezierCurveTo(x - a, y - oy, x - ox, y - b, x, y - b);
-        ctx.bezierCurveTo(x + ox, y - b, x + a, y - oy, x + a, y);
-        ctx.bezierCurveTo(x + a, y + oy, x + ox, y + b, x, y + b);
-        ctx.bezierCurveTo(x - ox, y + b, x - a, y + oy, x - a, y);
         ctx.closePath();
     }
 });
@@ -14488,349 +16072,6 @@ var Isogon = Path.extend({
 
         ctx.closePath();
 
-        return;
-    }
-});
-
-/**
- * 直线
- * @module zrender/graphic/shape/Line
- */
-
-var Line = Path.extend({
-
-    type: 'line',
-
-    shape: {
-        // Start point
-        x1: 0,
-        y1: 0,
-        // End point
-        x2: 0,
-        y2: 0,
-
-        percent: 1
-    },
-
-    style: {
-        stroke: '#000',
-        fill: null
-    },
-
-    buildPath: function (ctx, shape) {
-        var x1 = shape.x1;
-        var y1 = shape.y1;
-        var x2 = shape.x2;
-        var y2 = shape.y2;
-        var percent = shape.percent;
-
-        if (percent === 0) {
-            return;
-        }
-
-        ctx.moveTo(x1, y1);
-
-        if (percent < 1) {
-            x2 = x1 * (1 - percent) + x2 * percent;
-            y2 = y1 * (1 - percent) + y2 * percent;
-        }
-        ctx.lineTo(x2, y2);
-    },
-
-    /**
-     * Get point at percent
-     * @param  {number} percent
-     * @return {Array.<number>}
-     */
-    pointAt: function (p) {
-        var shape = this.shape;
-        return [
-            shape.x1 * (1 - p) + shape.x2 * p,
-            shape.y1 * (1 - p) + shape.y2 * p
-        ];
-    }
-});
-
-/**
- * Catmull-Rom spline 插值折线
- * @module zrender/shape/util/smoothSpline
- * @author pissang (https://www.github.com/pissang)
- *         Kener (@Kener-林峰, kener.linfeng@gmail.com)
- *         errorrik (errorrik@gmail.com)
- */
-
-/**
- * @inner
- */
-function interpolate(p0, p1, p2, p3, t, t2, t3) {
-    var v0 = (p2 - p0) * 0.5;
-    var v1 = (p3 - p1) * 0.5;
-    return (2 * (p1 - p2) + v0 + v1) * t3
-            + (-3 * (p1 - p2) - 2 * v0 - v1) * t2
-            + v0 * t + p1;
-}
-
-/**
- * @alias module:zrender/shape/util/smoothSpline
- * @param {Array} points 线段顶点数组
- * @param {boolean} isLoop
- * @return {Array}
- */
-var smoothSpline = function (points, isLoop) {
-    var len$$1 = points.length;
-    var ret = [];
-
-    var distance$$1 = 0;
-    for (var i = 1; i < len$$1; i++) {
-        distance$$1 += distance(points[i - 1], points[i]);
-    }
-
-    var segs = distance$$1 / 2;
-    segs = segs < len$$1 ? len$$1 : segs;
-    for (var i = 0; i < segs; i++) {
-        var pos = i / (segs - 1) * (isLoop ? len$$1 : len$$1 - 1);
-        var idx = Math.floor(pos);
-
-        var w = pos - idx;
-
-        var p0;
-        var p1 = points[idx % len$$1];
-        var p2;
-        var p3;
-        if (!isLoop) {
-            p0 = points[idx === 0 ? idx : idx - 1];
-            p2 = points[idx > len$$1 - 2 ? len$$1 - 1 : idx + 1];
-            p3 = points[idx > len$$1 - 3 ? len$$1 - 1 : idx + 2];
-        }
-        else {
-            p0 = points[(idx - 1 + len$$1) % len$$1];
-            p2 = points[(idx + 1) % len$$1];
-            p3 = points[(idx + 2) % len$$1];
-        }
-
-        var w2 = w * w;
-        var w3 = w * w2;
-
-        ret.push([
-            interpolate(p0[0], p1[0], p2[0], p3[0], w, w2, w3),
-            interpolate(p0[1], p1[1], p2[1], p3[1], w, w2, w3)
-        ]);
-    }
-    return ret;
-};
-
-/**
- * 贝塞尔平滑曲线
- * @module zrender/shape/util/smoothBezier
- * @author pissang (https://www.github.com/pissang)
- *         Kener (@Kener-林峰, kener.linfeng@gmail.com)
- *         errorrik (errorrik@gmail.com)
- */
-
-/**
- * 贝塞尔平滑曲线
- * @alias module:zrender/shape/util/smoothBezier
- * @param {Array} points 线段顶点数组
- * @param {number} smooth 平滑等级, 0-1
- * @param {boolean} isLoop
- * @param {Array} constraint 将计算出来的控制点约束在一个包围盒内
- *                           比如 [[0, 0], [100, 100]], 这个包围盒会与
- *                           整个折线的包围盒做一个并集用来约束控制点。
- * @param {Array} 计算出来的控制点数组
- */
-var smoothBezier = function (points, smooth, isLoop, constraint) {
-    var cps = [];
-
-    var v = [];
-    var v1 = [];
-    var v2 = [];
-    var prevPoint;
-    var nextPoint;
-
-    var min$$1, max$$1;
-    if (constraint) {
-        min$$1 = [Infinity, Infinity];
-        max$$1 = [-Infinity, -Infinity];
-        for (var i = 0, len$$1 = points.length; i < len$$1; i++) {
-            min(min$$1, min$$1, points[i]);
-            max(max$$1, max$$1, points[i]);
-        }
-        // 与指定的包围盒做并集
-        min(min$$1, min$$1, constraint[0]);
-        max(max$$1, max$$1, constraint[1]);
-    }
-
-    for (var i = 0, len$$1 = points.length; i < len$$1; i++) {
-        var point = points[i];
-
-        if (isLoop) {
-            prevPoint = points[i ? i - 1 : len$$1 - 1];
-            nextPoint = points[(i + 1) % len$$1];
-        }
-        else {
-            if (i === 0 || i === len$$1 - 1) {
-                cps.push(clone$1(points[i]));
-                continue;
-            }
-            else {
-                prevPoint = points[i - 1];
-                nextPoint = points[i + 1];
-            }
-        }
-
-        sub(v, nextPoint, prevPoint);
-
-        // use degree to scale the handle length
-        scale(v, v, smooth);
-
-        var d0 = distance(point, prevPoint);
-        var d1 = distance(point, nextPoint);
-        var sum = d0 + d1;
-        if (sum !== 0) {
-            d0 /= sum;
-            d1 /= sum;
-        }
-
-        scale(v1, v, -d0);
-        scale(v2, v, d1);
-        var cp0 = add([], point, v1);
-        var cp1 = add([], point, v2);
-        if (constraint) {
-            max(cp0, cp0, min$$1);
-            min(cp0, cp0, max$$1);
-            max(cp1, cp1, min$$1);
-            min(cp1, cp1, max$$1);
-        }
-        cps.push(cp0);
-        cps.push(cp1);
-    }
-
-    if (isLoop) {
-        cps.push(cps.shift());
-    }
-
-    return cps;
-};
-
-function buildPath$1(ctx, shape, closePath) {
-    var points = shape.points;
-    var smooth = shape.smooth;
-    if (points && points.length >= 2) {
-        if (smooth && smooth !== 'spline') {
-            var controlPoints = smoothBezier(
-                points, smooth, closePath, shape.smoothConstraint
-            );
-
-            ctx.moveTo(points[0][0], points[0][1]);
-            var len = points.length;
-            for (var i = 0; i < (closePath ? len : len - 1); i++) {
-                var cp1 = controlPoints[i * 2];
-                var cp2 = controlPoints[i * 2 + 1];
-                var p = points[(i + 1) % len];
-                ctx.bezierCurveTo(
-                    cp1[0], cp1[1], cp2[0], cp2[1], p[0], p[1]
-                );
-            }
-        }
-        else {
-            if (smooth === 'spline') {
-                points = smoothSpline(points, closePath);
-            }
-
-            ctx.moveTo(points[0][0], points[0][1]);
-            for (var i = 1, l = points.length; i < l; i++) {
-                ctx.lineTo(points[i][0], points[i][1]);
-            }
-        }
-
-        closePath && ctx.closePath();
-    }
-}
-
-/**
- * 多边形
- * @module zrender/shape/Polygon
- */
-
-var Polygon = Path.extend({
-
-    type: 'polygon',
-
-    shape: {
-        points: null,
-
-        smooth: false,
-
-        smoothConstraint: null
-    },
-
-    buildPath: function (ctx, shape) {
-        buildPath$1(ctx, shape, true);
-    }
-});
-
-/**
- * @module zrender/graphic/shape/Polyline
- */
-
-var Polyline = Path.extend({
-
-    type: 'polyline',
-
-    shape: {
-        points: null,
-
-        smooth: false,
-
-        smoothConstraint: null
-    },
-
-    style: {
-        stroke: '#000',
-
-        fill: null
-    },
-
-    buildPath: function (ctx, shape) {
-        buildPath$1(ctx, shape, false);
-    }
-});
-
-/**
- * 矩形
- * @module zrender/graphic/shape/Rect
- */
-
-var Rect = Path.extend({
-
-    type: 'rect',
-
-    shape: {
-        // 左上、右上、右下、左下角的半径依次为r1、r2、r3、r4
-        // r缩写为1         相当于 [1, 1, 1, 1]
-        // r缩写为[1]       相当于 [1, 1, 1, 1]
-        // r缩写为[1, 2]    相当于 [1, 2, 1, 2]
-        // r缩写为[1, 2, 3] 相当于 [1, 2, 3, 2]
-        r: 0,
-
-        x: 0,
-        y: 0,
-        width: 0,
-        height: 0
-    },
-
-    buildPath: function (ctx, shape) {
-        var x = shape.x;
-        var y = shape.y;
-        var width = shape.width;
-        var height = shape.height;
-        if (!shape.r) {
-            ctx.rect(x, y, width, height);
-        }
-        else {
-            buildPath(ctx, shape);
-        }
-        ctx.closePath();
         return;
     }
 });
@@ -14918,21 +16159,6 @@ var Rose = Path.extend({
         }
     }
 });
-
-// Fix weird bug in some version of IE11 (like 11.0.9600.178**),
-// where exception "unexpected call to method or property access"
-// might be thrown when calling ctx.fill or ctx.stroke after a path
-// whose area size is zero is drawn and ctx.clip() is called and
-// shadowBlur is set. See #4572, #3112, #5777.
-// (e.g.,
-//  ctx.moveTo(10, 10);
-//  ctx.lineTo(20, 10);
-//  ctx.closePath();
-//  ctx.clip();
-//  ctx.shadowBlur = 10;
-//  ...
-//  ctx.fill();
-// )
 
 var shadowTemp = [
     ['shadowBlur', 0],
@@ -15182,76 +16408,6 @@ var Trochoid = Path.extend({
     }
 });
 
-/**
- * @param {Array.<Object>} colorStops
- */
-var Gradient = function (colorStops) {
-
-    this.colorStops = colorStops || [];
-
-};
-
-Gradient.prototype = {
-
-    constructor: Gradient,
-
-    addColorStop: function (offset, color) {
-        this.colorStops.push({
-
-            offset: offset,
-
-            color: color
-        });
-    }
-
-};
-
-/**
- * x, y, x2, y2 are all percent from 0 to 1
- * @param {number} [x=0]
- * @param {number} [y=0]
- * @param {number} [x2=1]
- * @param {number} [y2=0]
- * @param {Array.<Object>} colorStops
- * @param {boolean} [globalCoord=false]
- */
-var LinearGradient = function (x, y, x2, y2, colorStops, globalCoord) {
-    // Should do nothing more in this constructor. Because gradient can be
-    // declard by `color: {type: 'linear', colorStops: ...}`, where
-    // this constructor will not be called.
-
-    this.x = x == null ? 0 : x;
-
-    this.y = y == null ? 0 : y;
-
-    this.x2 = x2 == null ? 1 : x2;
-
-    this.y2 = y2 == null ? 0 : y2;
-
-    // Can be cloned
-    this.type = 'linear';
-
-    // If use global coord
-    this.global = globalCoord || false;
-
-    Gradient.call(this, colorStops);
-};
-
-LinearGradient.prototype = {
-
-    constructor: LinearGradient
-};
-
-inherits(LinearGradient, Gradient);
-
-/**
- * x, y, r are all percent from 0 to 1
- * @param {number} [x=0.5]
- * @param {number} [y=0.5]
- * @param {number} [r=0.5]
- * @param {Array.<Object>} [colorStops]
- * @param {boolean} [globalCoord=false]
- */
 var RadialGradient = function (x, y, r, colorStops, globalCoord) {
     // Should do nothing more in this constructor. Because gradient can be
     // declard by `color: {type: 'radial', colorStops: ...}`, where
@@ -15344,7 +16500,7 @@ function attrXLink(el, key, val) {
     el.setAttributeNS('http://www.w3.org/1999/xlink', key, val);
 }
 
-function bindStyle(svgEl, style, isText) {
+function bindStyle(svgEl, style, isText, el) {
     if (pathHasFill(style, isText)) {
         var fill = isText ? style.textFill : style.fill;
         fill = fill === 'transparent' ? NONE : fill;
@@ -15369,7 +16525,7 @@ function bindStyle(svgEl, style, isText) {
         }
 
         attr(svgEl, 'fill', fill);
-        attr(svgEl, 'fill-opacity', style.opacity);
+        attr(svgEl, 'fill-opacity', style.fillOpacity != null ? style.fillOpacity * style.opacity : style.opacity);
     }
     else {
         attr(svgEl, 'fill', NONE);
@@ -15383,12 +16539,12 @@ function bindStyle(svgEl, style, isText) {
             ? style.textStrokeWidth
             : style.lineWidth;
         var strokeScale = !isText && style.strokeNoScale
-            ? style.host.getLineScale()
+            ? el.getLineScale()
             : 1;
         attr(svgEl, 'stroke-width', strokeWidth / strokeScale);
         // stroke then fill for text; fill then stroke for others
         attr(svgEl, 'paint-order', isText ? 'stroke' : 'fill');
-        attr(svgEl, 'stroke-opacity', style.opacity);
+        attr(svgEl, 'stroke-opacity', style.strokeOpacity != null ? style.strokeOpacity : style.opacity);
         var lineDash = style.lineDash;
         if (lineDash) {
             attr(svgEl, 'stroke-dasharray', style.lineDash.join(','));
@@ -15549,7 +16705,7 @@ svgPath.brush = function (el) {
         }
     }
 
-    bindStyle(svgEl, style);
+    bindStyle(svgEl, style, false, el);
     setTransform(svgEl, el.transform);
 
     if (style.text != null) {
@@ -15682,7 +16838,7 @@ var svgTextDrawRectText = function (el, rect, textRect) {
     attr(textSvgEl, 'x', x);
     attr(textSvgEl, 'y', y);
 
-    bindStyle(textSvgEl, style, true);
+    bindStyle(textSvgEl, style, true, el);
     if (el instanceof Text || el.style.transformText) {
         // Transform text with element
         setTransform(textSvgEl, el.transform);
@@ -15697,6 +16853,7 @@ var svgTextDrawRectText = function (el, rect, textRect) {
             var pos = el.transformCoordToGlobal(rect.x, rect.y);
             rect.x = pos[0];
             rect.y = pos[1];
+            el.transform = identity(create$1());
         }
 
         // Text rotation, but no element transform
@@ -16247,14 +17404,6 @@ Definable.prototype.getSvgElement = function (displayable) {
  * @author Zhang Wenli
  */
 
-/**
- * Manages SVG gradient elements.
- *
- * @class
- * @extends Definable
- * @param   {number}     zrId    zrender instance id
- * @param   {SVGElement} svgRoot root of SVG document
- */
 function GradientManager(zrId, svgRoot) {
     Definable.call(
         this,
@@ -16450,14 +17599,6 @@ GradientManager.prototype.markUsed = function (displayable) {
  * @author Zhang Wenli
  */
 
-/**
- * Manages SVG clipPath elements.
- *
- * @class
- * @extends Definable
- * @param   {number}     zrId    zrender instance id
- * @param   {SVGElement} svgRoot root of SVG document
- */
 function ClippathManager(zrId, svgRoot) {
     Definable.call(this, zrId, svgRoot, 'clipPath', '__clippath_in_use__');
 }
@@ -16616,14 +17757,6 @@ ClippathManager.prototype.markUsed = function (displayable) {
  * @author Zhang Wenli
  */
 
-/**
- * Manages SVG shadow elements.
- *
- * @class
- * @extends Definable
- * @param   {number}     zrId    zrender instance id
- * @param   {SVGElement} svgRoot root of SVG document
- */
 function ShadowManager(zrId, svgRoot) {
     Definable.call(
         this,
@@ -18515,9 +19648,11 @@ exports.vector = vector;
 exports.color = color;
 exports.path = path;
 exports.util = util;
+exports.parseSVG = parseSVG;
 exports.Group = Group;
 exports.Path = Path;
 exports.Image = ZImage;
+exports.Sprite = ZSprite;
 exports.CompoundPath = CompoundPath;
 exports.Text = Text;
 exports.IncrementalDisplayable = IncrementalDisplayble;

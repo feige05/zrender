@@ -13,6 +13,7 @@ import {parseSVG} from './tool/parseSVG';
 export {default as Group} from './container/Group';
 export {default as Path} from './graphic/Path';
 export {default as Image} from './graphic/Image';
+export {default as Sprite} from './graphic/Sprite';
 export {default as CompoundPath} from './graphic/CompoundPath';
 export {default as Text} from './graphic/Text';
 export {default as IncrementalDisplayable} from './graphic/IncrementalDisplayable';
