@@ -15466,7 +15466,17 @@ ZSprite.prototype = {
 
     constructor: ZSprite,
     type: 'sprite',
-
+  setClip:function(key,value){
+      //TODO:重新设置Clip属性
+      /**
+       * @config startIndex(0) 开始位置
+       * @config endIndex(0) 结束位置
+       * @config duration(1000) 动画间隔
+       * @config delay(0) 动画延迟时间
+       * @config loop(true)
+       */
+    // this._clip
+  },
   brush: function(ctx, prevEl) {
     var style = this.style;
     var src = style.image;
@@ -15521,9 +15531,9 @@ ZSprite.prototype = {
           }
           _this._clip = new Clip$2({
             loop: _this.loop,
-            startIndex: 0,
-            endIndex: num_frames - 1,
-            duration: duration
+            startIndex: 0,//TODO: reset startIndex
+            endIndex: num_frames - 1,//TODO: reset endIndex
+            duration: duration//TODO: reset duration
           });
           _this._clip.onframe = function(frameIndex) {
             style.frame = frameIndex;

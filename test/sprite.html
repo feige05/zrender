@@ -2,7 +2,7 @@
 <html>
 <head>
     <meta charset="utf-8" />
-    <title>Image</title>
+    <title>Sprite</title>
     <script src="../dist/zrender.js"></script>
 </head>
 <body>
@@ -10,6 +10,7 @@
         html, body, #main {
             width: 100%;
             height: 100%;
+            background-color: black;
         }
     </style>
     <div id="main"></div>
@@ -29,7 +30,8 @@
                         y: 80,
                         w: 112,
                         h: 115,
-                    }
+                    },
+                    draggable: true
                 });
                 sprite.onload = function(){
                     console.log('sprite image onload:::::',this)
