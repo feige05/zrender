@@ -15324,9 +15324,9 @@ function parseSVG(xml, opt) {
 function Clip$2(config) {
     var conf = config || {};
     // { loop, startIndex, endIndex, duration, delay, gap, onframe, ondestroy, onrestart }
-    this.onframe = conf.onframe || new Function();
-    this.ondestroy = conf.ondestroy || new Function();
-    this.onrestart = conf.onrestart || new Function();
+    this.onframe = conf.onframe || noop;
+    this.ondestroy = conf.ondestroy || noop;
+    this.onrestart = conf.onrestart || noop;
 
     this._duration = conf.duration || 1000;
     this._doneList = [];
@@ -15345,27 +15345,36 @@ function Clip$2(config) {
     this._pausedTime = 0;
     this._paused = false;
     this._nextTime = 0;
+    this._needRestart = false;
   }
 Clip$2.prototype = {
 
     constructor: Clip$2,
+    setConfig:function(config){
+        /**
+         * @config startIndex(0) 开始位置
+         * @config endIndex(0) 结束位置
+         * @config duration(1000) 动画间隔
+         */
+        if(config.hasOwnProperty('startIndex')){
+            this._startIndex = config.startIndex || 0;
+        }
+        if(config.hasOwnProperty('endIndex')){
+            this._endIndex = config.endIndex || 0;
+        }
+        if(config.hasOwnProperty('duration')){
+            this._duration = config.duration || 1000;
+        }
+        this._needRestart = true;
+    },
     /**
      * 开始执行动画
      * @return {module:zrender/animation/Animator}
      */
     start:function() {
         if (!this._frameCount || this._startIndex >= this._frameCount - 1) {
-        return this._doneCallback()
+             return this._doneCallback()
         }
-        // // 兼容 zrender animation
-        // // If start after added to animation
-        // if (this.animation) {
-        //   this.animation.addClip(this)
-        // }
-        // // This optimization will help the case that in the upper application
-        // // the view may be refreshed frequently, where animation will be
-        // // called repeatly but nothing changed.
-
         return this
     },
     /**
@@ -15383,38 +15392,40 @@ Clip$2.prototype = {
         // Set startTime on first step, or _startTime may has milleseconds different between clips
         // PENDING
         if (!this._initialized) {
-        this._startTime = globalTime + this._delay;
-        this._index = this._startIndex + 1;
-        this._nextTime = this._startTime + this._duration;
-        this._initialized = true;
+            this._startTime = globalTime + this._delay;
+            this._index = this._startIndex + 1;
+            this._nextTime = this._startTime + this._duration;
+            this._initialized = true;
         }
-
+        if(this._needRestart){
+            this._needRestart = false;
+            this.restart(globalTime);
+            return 
+        }
         if (this._paused) {
-        this._pausedTime += deltaTime;
-        return
+            this._pausedTime += deltaTime;
+            return
         }
 
         if (globalTime - this._pausedTime >= this._nextTime) {
-        this.onframe(this._index);
-        this._index = this._index + 1;
-        // 如果帧全部播放完
-        if (this._index > this._endIndex) {
-            if (this._loop) {
-            this.restart(globalTime);
-            this._index = this._startIndex;
-            this._nextTime = this._duration + this._startTime;// 上一帧保留时间 + 开始时间
-            // 重新开始周期
-            // 抛出而不是直接调用事件直到 stage.update 后再统一调用这些事件
-            return 'restart'
-            }
+            this.onframe(this._index);
+            this._index = this._index + 1;
+            // 如果帧全部播放完
+            if (this._index > this._endIndex) {
+                if (this._loop) {
+                    this.restart(globalTime);
+                    // 重新开始周期
+                    // 抛出而不是直接调用事件直到 stage.update 后再统一调用这些事件
+                    return 'restart'
+                }
 
-            // 动画完成将这个控制器标识为待删除
-            // 在Animation.update中进行批量删除
-            this._needsRemove = true;
-            return 'destroy'
-        } else {
-            this._nextTime = this._nextTime + this._duration;
-        }
+                // 动画完成将这个控制器标识为待删除
+                // 在Animation.update中进行批量删除
+                this._needsRemove = true;
+                return 'destroy'
+            } else {
+                this._nextTime = this._nextTime + this._duration;
+            }
         }
 
         return null
@@ -15424,6 +15435,8 @@ Clip$2.prototype = {
         this._startTime = globalTime + this._gap;
         this._pausedTime = 0;
         this._needsRemove = false;
+        this._index = this._startIndex;
+        this._nextTime = this._duration + this._startTime;// 上一帧保留时间 + 开始时间
     },
 
     pause:function() {
@@ -15441,13 +15454,13 @@ Clip$2.prototype = {
         var doneList = this._doneList;
         var len = doneList.length;
         for (var i = 0; i < len; i++) {
-        doneList[i].call(this);
+            doneList[i].call(this);
         }
     },
     fire:function(eventType, arg) {
         eventType = 'on' + eventType;
         if (this[eventType]) {
-        this[eventType](arg);
+            this[eventType](arg);
         }
     }
 };
@@ -15466,16 +15479,13 @@ ZSprite.prototype = {
 
     constructor: ZSprite,
     type: 'sprite',
-    setClip:function(key,value){
+    /**
+     * 
+     */
+    setClip:function(config){
         //TODO:重新设置Clip属性
-        /**
-         * @config startIndex(0) 开始位置
-         * @config endIndex(0) 结束位置
-         * @config duration(1000) 动画间隔
-         * @config delay(0) 动画延迟时间
-         * @config loop(true)
-         */
-        // this._clip
+        config && this._clip.setConfig(config);
+        return this
     },
     brush: function(ctx, prevEl) {
         var style = this.style;
@@ -15487,11 +15497,12 @@ ZSprite.prototype = {
 
         style.offset_x = style.offset_x || 0;
         style.offset_y = style.offset_y || 0;
+        style.padding_x = style.padding_x || 0;
+        style.padding_y = style.padding_y || 0;
         style.numFrames = style.numFrames || 0;
         style.frame = style.frame || 0;
 
         this.autoplay = this.clip.autoplay === true;
-        this.generate = this.clip.generate !== false;
 
         var image = this._image = createOrUpdateImage(
         src,
@@ -15501,32 +15512,19 @@ ZSprite.prototype = {
             // Set the full source image dimensions
             _this.full_width = image.width;
             _this.full_height = image.height;
-
+            var dir = style.direction || 'x';
+            var padding_size = (dir === "y") ? style.padding_y : style.padding_x;
             // If automatic generation is specified
-            if (_this.generate) {
-                var dir = style.direction || 'x';
-                var length_full = (dir === "y") ? _this.full_height : _this.full_width;
-                var length_cropped = (dir === "y") ? style.h : style.w;
-                var num_frames = style.numFrames > 0 ? style.numFrames : Math.floor(length_full / length_cropped);
-                    style.numFrames = num_frames;
-
-                // Create frames based on the specified width, height, direction, offset and duration
-                _this.frames = [];
-                for (var i = 0; i < num_frames; i++) {
-                    _this.frames.push({
-                        x: style.offset_x + (i * (dir === "x" ? style.w : 0)),
-                        y: style.offset_y + (i * (dir === "y" ? style.h : 0))
-                    });
-                }
-            }
+            var length_full = (dir === "y") ? _this.full_height : _this.full_width;
+            var length_cropped = (dir === "y") ? style.h : style.w;
+            style.numFrames = style.numFrames > 0 ? style.numFrames : Math.floor((length_full - padding_size * 2)/ length_cropped);
             _this._clip = new Clip$2({
                 loop: _this.clip.loop,
-                startIndex: _this.clip.startIndex || 0,//TODO: reset startIndex
-                endIndex: _this.clip.endIdnex || num_frames - 1,//TODO: reset endIndex
-                duration: _this.clip.duration,//TODO: reset duration
+                startIndex: _this.clip.startIndex || 0,
+                endIndex: _this.clip.endIdnex || style.numFrames - 1,
+                duration: _this.clip.duration,
                 onframe: function(frameIndex) {
-                    style.frame = frameIndex;
-                    _this.dirty(false);
+                    _this.setStyle('frame',frameIndex);
                 }
             });
             _this.autoplay && _this._clip.start();
@@ -15544,7 +15542,7 @@ ZSprite.prototype = {
         this.setTransform(ctx);
         if (this.loaded) {
             // console.log('call brush::::', style.frame, this.frames)
-            this._draw(ctx, style, this.frames[style.frame]);
+            this._draw(ctx, style);
         }
         // Draw rect text
         if (style.text != null) {
@@ -15553,7 +15551,7 @@ ZSprite.prototype = {
             this.drawRectText(ctx, this.getBoundingRect());
         }
     },
-    _draw: function(ctx, style, frame) {
+    _draw: function(ctx, style) {
         // var _this = this
         var x = style.x || 0;
         var y = style.y || 0;
@@ -15561,7 +15559,14 @@ ZSprite.prototype = {
         // If the image has not been loaded or the sprite has no frames, the frame size must be 0 (for clipChildren feature).
         var fw = style.w;
         var fh = style.h;
-        if (!frame || this.frame > style.numFrames) {
+        var frameIndex = style.frame;
+        var dir = style.direction || 'x';
+        var padding_size = (dir === "y") ? style.padding_y : style.padding_x;
+        var frame = {
+            x: padding_size + style.offset_x + (frameIndex * (dir === "x" ? style.w : 0)),
+            y: padding_size + style.offset_y + (frameIndex * (dir === "y" ? style.h : 0))
+        };
+        if (frameIndex > style.numFrames) {
             // Do clip with an empty path
             if (this.clipChildren) {
                 ctx.beginPath();

@@ -12,8 +12,26 @@
             height: 100%;
             background-color: black;
         }
+        .buttons{
+            position: absolute;
+            height: 100px;
+            z-index: 1;
+            top: 0;
+            left: 0;
+        }
+        .buttons > button {
+            height: 60px;
+            font-size: 30px;
+            margin-top:10px;
+        }
     </style>
     <div id="main"></div>
+    <div class="buttons">
+        <button onclick="go(0)">向下</button>
+        <button onclick="go(1)">向左</button>
+        <button onclick="go(2)">向右</button>
+        <button onclick="go(3)">向上</button>
+    </div>
     <script type="text/javascript">
         var zr = zrender.init(document.getElementById('main'));
                 var sprite = new zrender.Sprite({
@@ -27,11 +45,12 @@
                         duration: 500,
                     },
                     style: {
-                        image: 'radar.png',
+                        image: 'th.jpeg',
                         x: 80,
                         y: 80,
-                        w: 112,
-                        h: 115,
+                        w: 117,
+                        h: 163,
+                        padding_x:0
                     },
                     draggable: true
                 });
@@ -39,6 +58,11 @@
                     console.log('sprite image onload:::::',this)
                 }
                 zr.add(sprite);
+                var oy=[0,180,360,535]
+                function go(i){
+                    sprite.setStyle("offset_y",oy[i])
+                }
+                
     </script>
 </body>
 </html>
