@@ -164,145 +164,126 @@ ZSprite.prototype = {
 
     constructor: ZSprite,
     type: 'sprite',
-  setClip:function(key,value){
-      //TODO:重新设置Clip属性
-      /**
-       * @config startIndex(0) 开始位置
-       * @config endIndex(0) 结束位置
-       * @config duration(1000) 动画间隔
-       * @config delay(0) 动画延迟时间
-       * @config loop(true)
-       */
-    // this._clip
-  },
-  brush: function(ctx, prevEl) {
-    var style = this.style
-    var src = style.image
-    var zr = this.__zr
-    var _this = this
-    // Must bind each time
-    style.bind(ctx, this, prevEl)
+    setClip:function(key,value){
+        //TODO:重新设置Clip属性
+        /**
+         * @config startIndex(0) 开始位置
+         * @config endIndex(0) 结束位置
+         * @config duration(1000) 动画间隔
+         * @config delay(0) 动画延迟时间
+         * @config loop(true)
+         */
+        // this._clip
+    },
+    brush: function(ctx, prevEl) {
+        var style = this.style
+        var src = style.image
+        var zr = this.__zr
+        var _this = this
+        // Must bind each time
+        style.bind(ctx, this, prevEl)
 
-    style.offset_x = style.offset_x || 0
-    style.offset_y = style.offset_y || 0
-    style.numFrames = style.numFrames || 0
-    style.frame = style.frame || 0
+        style.offset_x = style.offset_x || 0
+        style.offset_y = style.offset_y || 0
+        style.numFrames = style.numFrames || 0
+        style.frame = style.frame || 0
 
-    this.loop = this.loop || false
-    this.autoplay = this.autoplay === true
-    this.sTM = this.sTM || null
-    this.generate = this.generate !== false
+        this.autoplay = this.clip.autoplay === true
+        this.generate = this.clip.generate !== false
 
-    var image = this._image = imageHelper.createOrUpdateImage(
-      src,
-      this._image,
-      this,
-      function(image) {
-        // Set the full source image dimensions
-        _this.full_width = image.width
-        _this.full_height = image.height
+        var image = this._image = imageHelper.createOrUpdateImage(
+        src,
+        this._image,
+        this,
+        function(image) {
+            // Set the full source image dimensions
+            _this.full_width = image.width
+            _this.full_height = image.height
 
-        // If automatic generation is specified
-        if (_this.generate) {
-          var dir, length_full, length_cropped, num_frames, i, duration
+            // If automatic generation is specified
+            if (_this.generate) {
+                var dir = style.direction || 'x'
+                var length_full = (dir === "y") ? _this.full_height : _this.full_width
+                var length_cropped = (dir === "y") ? style.h : style.w
+                var num_frames = style.numFrames > 0 ? style.numFrames : Math.floor(length_full / length_cropped)
+                    style.numFrames = num_frames
 
-          // Get frame data
-          dir = style.direction || 'x'
-          duration = style.duration || 1000
-          length_full = (dir === "y") ? _this.full_height : _this.full_width
-          length_cropped = (dir === "y") ? style.h : style.w
-
-          if (style.numFrames > 0) {
-            num_frames = style.numFrames
-          } else {
-            num_frames = length_full / length_cropped
-            style.numFrames = num_frames
-          }
-
-          // Create frames based on the specified width, height, direction, offset and duration
-          _this.frames = []
-          for (i = 0; i < num_frames; i++) {
-            _this.frames.push({
-              x: style.offset_x + (i * (dir === "x" ? style.w : 0)),
-              y: style.offset_y + (i * (dir === "y" ? style.h : 0))
+                // Create frames based on the specified width, height, direction, offset and duration
+                _this.frames = []
+                for (var i = 0; i < num_frames; i++) {
+                    _this.frames.push({
+                        x: style.offset_x + (i * (dir === "x" ? style.w : 0)),
+                        y: style.offset_y + (i * (dir === "y" ? style.h : 0))
+                    })
+                }
+            }
+            _this._clip = new Clip({
+                loop: _this.clip.loop,
+                startIndex: _this.clip.startIndex || 0,//TODO: reset startIndex
+                endIndex: _this.clip.endIdnex || num_frames - 1,//TODO: reset endIndex
+                duration: _this.clip.duration,//TODO: reset duration
+                onframe: function(frameIndex) {
+                    style.frame = frameIndex
+                    _this.dirty(false)
+                }
             })
-          }
-          _this._clip = new Clip({
-            loop: _this.loop,
-            startIndex: 0,//TODO: reset startIndex
-            endIndex: num_frames - 1,//TODO: reset endIndex
-            duration: duration//TODO: reset duration
-          })
-          _this._clip.onframe = function(frameIndex) {
-            style.frame = frameIndex
-            _this.dirty(false)
-          }
-          if (_this.autoplay) {
-            _this._clip.start()
-          }
+            _this.autoplay && _this._clip.start()
+            // If animate after added to the zrender
+            zr && zr.animation.addAnimator(_this._clip)
+            _this.loaded = true
+            zrUtil.isFunction(_this.onload) && _this.onload()
+        })
+
+        if (!image || !imageHelper.isImageReady(image)) {
+            return
         }
-        // If animate after added to the zrender
-        if (zr) {
-          zr.animation.addAnimator(_this._clip)
+
+        // 设置transform
+        this.setTransform(ctx)
+        if (this.loaded) {
+            // console.log('call brush::::', style.frame, this.frames)
+            this._draw(ctx, style, this.frames[style.frame])
         }
-        _this.loaded = true
-        zrUtil.isFunction(_this.onload) && _this.onload()
-        // _this.__zr.refresh()
-      }
-    )
+        // Draw rect text
+        if (style.text != null) {
+            // Only restore transform when needs draw text.
+            this.restoreTransform(ctx)
+            this.drawRectText(ctx, this.getBoundingRect())
+        }
+    },
+    _draw: function(ctx, style, frame) {
+        // var _this = this
+        var x = style.x || 0
+        var y = style.y || 0
 
-    if (!image || !imageHelper.isImageReady(image)) {
-      return
+        // If the image has not been loaded or the sprite has no frames, the frame size must be 0 (for clipChildren feature).
+        var fw = style.w
+        var fh = style.h
+        if (!frame || this.frame > style.numFrames) {
+            // Do clip with an empty path
+            if (this.clipChildren) {
+                ctx.beginPath()
+                ctx.rect(x, y, 0, 0)
+                ctx.closePath()
+                ctx.clip()
+            }
+            return this
+        }
+        // Draw the current sprite part
+        ctx.drawImage(this._image, frame.x, frame.y, fw, fh, x, y, fw, fh)
+        if (this.strokeWidth > 0) {
+            ctx.lineWidth = this.strokeWidth
+            ctx.strokeStyle = this.strokeColor
+            ctx.strokeRect(x, y, fw, fh)
+        }
+    },
+    getBoundingRect:function() {
+        var style = this.style
+        if (!this._rect) {
+            this._rect = new BoundingRect( style.x || 0, style.y || 0, style.w || 0, style.h || 0)
+        }
+        return this._rect
     }
-
-    // 设置transform
-    this.setTransform(ctx)
-    if (this.loaded) {
-      // console.log('call brush::::', style.frame, this.frames)
-      this._draw(ctx, style, this.frames[style.frame])
-    }
-    // Draw rect text
-    if (style.text != null) {
-      // Only restore transform when needs draw text.
-      this.restoreTransform(ctx)
-      this.drawRectText(ctx, this.getBoundingRect())
-    }
-  },
-  _draw:function(ctx, style, frame) {
-    // var _this = this
-    var x = style.x || 0
-    var y = style.y || 0
-
-    // If the image has not been loaded or the sprite has no frames, the frame size must be 0 (for clipChildren feature).
-    var fw = style.w
-    var fh = style.h
-    if (!frame || this.frame > style.numFrames) {
-      // Do clip with an empty path
-      if (this.clipChildren) {
-        ctx.beginPath()
-        ctx.rect(x, y, 0, 0)
-        ctx.closePath()
-        ctx.clip()
-      }
-      return this
-    }
-    // Draw the current sprite part
-    ctx.drawImage(this._image, frame.x, frame.y, fw, fh, x, y, fw, fh)
-    if (this.strokeWidth > 0) {
-      ctx.lineWidth = this.strokeWidth
-      ctx.strokeStyle = this.strokeColor
-      ctx.strokeRect(x, y, fw, fh)
-    }
-  },
-  getBoundingRect:function() {
-    var style = this.style
-    if (!this._rect) {
-      this._rect = new BoundingRect(
-        style.x || 0, style.y || 0, style.w || 0, style.h || 0
-      )
-    }
-    return this._rect
-  }
 }
 zrUtil.inherits(ZSprite, Displayable);
 

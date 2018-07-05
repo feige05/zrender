@@ -18,14 +18,16 @@
         var zr = zrender.init(document.getElementById('main'));
                 var sprite = new zrender.Sprite({
                     position: [0 * 20, 0 * 20],
-                    autoplay: true,
-                    loop: true,
-                    generate: true,
                     scale: [1, 1],
-                    style: {
-                        image: 'radar.png',
+                    clip: {
+                        autoplay: true,
+                        loop: true,
+                        generate: true,
                         frame: 0,
                         duration: 500,
+                    },
+                    style: {
+                        image: 'radar.png',
                         x: 80,
                         y: 80,
                         w: 112,
