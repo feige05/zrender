@@ -31,6 +31,7 @@
         <button onclick="go(1)">向左</button>
         <button onclick="go(2)">向右</button>
         <button onclick="go(3)">向上</button>
+        <button onclick="q()">加速</button>
     </div>
     <script type="text/javascript">
         var zr = zrender.init(document.getElementById('main'));
@@ -61,6 +62,15 @@
                 var oy=[0,180,360,535]
                 function go(i){
                     sprite.setStyle("offset_y",oy[i])
+                }
+                var duration = 500
+                function q(){
+                    duration -= 200
+                    if(duration >= 100){
+                        sprite.setClip({
+                            duration: duration
+                        })
+                    }
                 }
                 
     </script>

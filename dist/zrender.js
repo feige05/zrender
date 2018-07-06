@@ -15320,6 +15320,9 @@ function parseSVG(xml, opt) {
 //  *
 //  * TODO pause
 //  */
+function isNumber(value){
+    return typeof value === 'number' && value === value
+}
 
 function Clip$2(config) {
     var conf = config || {};
@@ -15338,8 +15341,8 @@ function Clip$2(config) {
     this._loop = !!(conf.loop);
     this._gap = conf.gap || 0;
 
-    this._startIndex = Object.prototype.toString.call(conf.startIndex) === '[object Number]' ? conf.startIndex : 0;
-    this._endIndex =  Object.prototype.toString.call(conf.endIndex) === '[object Number]' ? conf.endIndex : 0;
+    this._startIndex = isNumber(conf.startIndex) ? conf.startIndex : 0;
+    this._endIndex =  isNumber(conf.endIndex) ? conf.endIndex : 0;
     this._index = 0;
 
     this._pausedTime = 0;
@@ -15356,16 +15359,18 @@ Clip$2.prototype = {
          * @config endIndex(0) 结束位置
          * @config duration(1000) 动画间隔
          */
-        if(config.hasOwnProperty('startIndex')){
-            this._startIndex = config.startIndex || 0;
+        if(config.hasOwnProperty('startIndex') && isNumber(config.startIndex)){
+            this._startIndex = config.startIndex;
+            this._needRestart = true;
         }
-        if(config.hasOwnProperty('endIndex')){
-            this._endIndex = config.endIndex || 0;
+        if(config.hasOwnProperty('endIndex') && isNumber(config.endIdnex)){
+            this._endIndex = config.endIndex;
+            this._needRestart = true;
         }
-        if(config.hasOwnProperty('duration')){
-            this._duration = config.duration || 1000;
+        if(config.hasOwnProperty('duration')&& isNumber(config.duration)){
+            this._duration = config.duration;
         }
-        this._needRestart = true;
+        
     },
     /**
      * 开始执行动画
