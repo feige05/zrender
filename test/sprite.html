@@ -24,9 +24,11 @@
             font-size: 30px;
             margin-top:10px;
         }
-    </style>
+    </style>pause
     <div id="main"></div>
     <div class="buttons">
+        <button onclick="pause()">pause</button>
+        <button onclick="resume()">resume</button>
         <button onclick="go(0)">向下</button>
         <button onclick="go(1)">向左</button>
         <button onclick="go(2)">向右</button>
@@ -62,6 +64,12 @@
                 var oy=[0,180,360,535]
                 function go(i){
                     sprite.setStyle("offset_y",oy[i])
+                }
+                function pause(){
+                    sprite.pause()
+                }
+                function resume(){
+                    sprite.resume()
                 }
                 var duration = 500
                 function q(){

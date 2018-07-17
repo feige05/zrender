@@ -175,7 +175,13 @@ Clip.prototype = {
  * @param {Object} opts
  */
 function ZSprite(opts) {
+    var _this = this
     Displayable.call(this, opts);
+    ['pause','resume','isPaused'].forEach(function(method){
+        _this[method]= function(){
+            return _this._clip && _this._clip[method]()
+        }
+    })
 }
 
 ZSprite.prototype = {

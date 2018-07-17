@@ -15306,20 +15306,6 @@ function parseSVG(xml, opt) {
     return parser.parse(xml, opt);
 }
 
-// /**
-//  * 动画主控制器
-//  * @config startIndex(0) 开始位置
-//  * @config endIndex(0) 结束位置
-//  * @config duration(1000) 动画间隔
-//  * @config delay(0) 动画延迟时间
-//  * @config loop(true)
-//  * @config gap(0) 循环的间隔时间
-//  * @config onframe
-//  * @config ondestroy(optional)
-//  * @config onrestart(optional)
-//  *
-//  * TODO pause
-//  */
 function isNumber(value){
     return typeof value === 'number' && value === value
 }
@@ -15477,7 +15463,13 @@ Clip$2.prototype = {
  * @param {Object} opts
  */
 function ZSprite(opts) {
+    var _this = this;
     Displayable.call(this, opts);
+    ['pause','resume','isPaused'].forEach(function(method){
+        _this[method]= function(){
+            return _this._clip && _this._clip[method]()
+        };
+    });
 }
 
 ZSprite.prototype = {
