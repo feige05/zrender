@@ -8,6 +8,8 @@
 
 // TODO getTotalLength, getPointAtLength
 
+/* global Float32Array */
+
 import * as curve from './curve';
 import * as vec2 from './vector';
 import * as bbox from './bbox';
@@ -46,7 +48,7 @@ var mathSin = Math.sin;
 var mathSqrt = Math.sqrt;
 var mathAbs = Math.abs;
 
-var hasTypedArray = typeof Float32Array != 'undefined';
+var hasTypedArray = typeof Float32Array !== 'undefined';
 
 /**
  * @alias module:zrender/core/PathProxy
@@ -97,9 +99,11 @@ PathProxy.prototype = {
     /**
      * @readOnly
      */
-    setScale: function (sx, sy) {
-        this._ux = mathAbs(1 / dpr / sx) || 0;
-        this._uy = mathAbs(1 / dpr / sy) || 0;
+    setScale: function (sx, sy, segmentIgnoreThreshold) {
+        // Compat. Previously there is no segmentIgnoreThreshold.
+        segmentIgnoreThreshold = segmentIgnoreThreshold || 0;
+        this._ux = mathAbs(segmentIgnoreThreshold / dpr / sx) || 0;
+        this._uy = mathAbs(segmentIgnoreThreshold / dpr / sy) || 0;
     },
 
     getContext: function () {
@@ -336,7 +340,7 @@ PathProxy.prototype = {
 
         var len = data.length;
 
-        if (! (this.data && this.data.length == len) && hasTypedArray) {
+        if (!(this.data && this.data.length === len) && hasTypedArray) {
             this.data = new Float32Array(len);
         }
 
@@ -444,7 +448,7 @@ PathProxy.prototype = {
         y -= offset * dy;
 
         while ((dx > 0 && x <= x1) || (dx < 0 && x >= x1)
-        || (dx == 0 && ((dy > 0 && y <= y1) || (dy < 0 && y >= y1)))) {
+        || (dx === 0 && ((dy > 0 && y <= y1) || (dy < 0 && y >= y1)))) {
             idx = this._dashIdx;
             dash = lineDash[idx];
             x += dx * dash;
@@ -574,7 +578,7 @@ PathProxy.prototype = {
         for (var i = 0; i < data.length;) {
             var cmd = data[i++];
 
-            if (i == 1) {
+            if (i === 1) {
                 // 如果第一个命令是 L, C, Q
                 // 则 previous point 同绘制命令的第一个 point
                 //
@@ -629,10 +633,10 @@ PathProxy.prototype = {
                     var startAngle = data[i++];
                     var endAngle = data[i++] + startAngle;
                     // TODO Arc 旋转
-                    var psi = data[i++];
+                    i += 1;
                     var anticlockwise = 1 - data[i++];
 
-                    if (i == 1) {
+                    if (i === 1) {
                         // 直接使用 arc 命令
                         // 第一个命令起点还未定义
                         x0 = mathCos(startAngle) * rx + cx;
@@ -683,16 +687,19 @@ PathProxy.prototype = {
      */
     rebuildPath: function (ctx) {
         var d = this.data;
-        var x0, y0;
-        var xi, yi;
-        var x, y;
+        var x0;
+        var y0;
+        var xi;
+        var yi;
+        var x;
+        var y;
         var ux = this._ux;
         var uy = this._uy;
         var len = this._len;
         for (var i = 0; i < len;) {
             var cmd = d[i++];
 
-            if (i == 1) {
+            if (i === 1) {
                 // 如果第一个命令是 L, C, Q
                 // 则 previous point 同绘制命令的第一个 point
                 //
@@ -758,7 +765,7 @@ PathProxy.prototype = {
                         ctx.arc(cx, cy, r, theta, endAngle, 1 - fs);
                     }
 
-                    if (i == 1) {
+                    if (i === 1) {
                         // 直接使用 arc 命令
                         // 第一个命令起点还未定义
                         x0 = mathCos(theta) * rx + cx;

@@ -65,14 +65,14 @@ export function getWidth(text, font) {
  * @param {Object} [truncate]
  * @return {Object} {x, y, width, height, lineHeight}
  */
-export function getBoundingRect(text, font, textAlign, textVerticalAlign, textPadding, rich, truncate) {
+export function getBoundingRect(text, font, textAlign, textVerticalAlign, textPadding, textLineHeight, rich, truncate) {
     return rich
-        ? getRichTextRect(text, font, textAlign, textVerticalAlign, textPadding, rich, truncate)
-        : getPlainTextRect(text, font, textAlign, textVerticalAlign, textPadding, truncate);
+        ? getRichTextRect(text, font, textAlign, textVerticalAlign, textPadding, textLineHeight, rich, truncate)
+        : getPlainTextRect(text, font, textAlign, textVerticalAlign, textPadding, textLineHeight, truncate);
 }
 
-function getPlainTextRect(text, font, textAlign, textVerticalAlign, textPadding, truncate) {
-    var contentBlock = parsePlainText(text, font, textPadding, truncate);
+function getPlainTextRect(text, font, textAlign, textVerticalAlign, textPadding, textLineHeight, truncate) {
+    var contentBlock = parsePlainText(text, font, textPadding, textLineHeight, truncate);
     var outerWidth = getWidth(text, font);
     if (textPadding) {
         outerWidth += textPadding[1] + textPadding[3];
@@ -88,13 +88,14 @@ function getPlainTextRect(text, font, textAlign, textVerticalAlign, textPadding,
     return rect;
 }
 
-function getRichTextRect(text, font, textAlign, textVerticalAlign, textPadding, rich, truncate) {
+function getRichTextRect(text, font, textAlign, textVerticalAlign, textPadding, textLineHeight, rich, truncate) {
     var contentBlock = parseRichText(text, {
         rich: rich,
         truncate: truncate,
         font: font,
         textAlign: textAlign,
-        textPadding: textPadding
+        textPadding: textPadding,
+        textLineHeight: textLineHeight
     });
     var outerWidth = contentBlock.outerWidth;
     var outerHeight = contentBlock.outerHeight;
@@ -141,13 +142,16 @@ export function adjustTextY(y, height, textVerticalAlign) {
 }
 
 /**
+ * Follow same interface to `Displayable.prototype.calculateTextPosition`.
  * @public
- * @param {stirng} textPosition
- * @param {Object} rect {x, y, width, height}
- * @param {number} distance
- * @return {Object} {x, y, textAlign, textVerticalAlign}
+ * @param {Obejct} [out] Prepared out object. If not input, auto created in the method.
+ * @param {module:zrender/graphic/Style} style where `textPosition` and `textDistance` are visited.
+ * @param {Object} rect {x, y, width, height} Rect of the host elment, according to which the text positioned.
+ * @return {Object} The input `out`. Set: {x, y, textAlign, textVerticalAlign}
  */
-export function adjustTextPositionOnRect(textPosition, rect, distance) {
+export function calculateTextPosition(out, style, rect) {
+    var textPosition = style.textPosition;
+    var distance = style.textDistance;
 
     var x = rect.x;
     var y = rect.y;
@@ -232,12 +236,27 @@ export function adjustTextPositionOnRect(textPosition, rect, distance) {
             break;
     }
 
-    return {
-        x: x,
-        y: y,
-        textAlign: textAlign,
-        textVerticalAlign: textVerticalAlign
-    };
+    out = out || {};
+    out.x = x;
+    out.y = y;
+    out.textAlign = textAlign;
+    out.textVerticalAlign = textVerticalAlign;
+
+    return out;
+}
+
+/**
+ * To be removed. But still do not remove in case that some one has imported it.
+ * @deprecated
+ * @public
+ * @param {stirng} textPosition
+ * @param {Object} rect {x, y, width, height}
+ * @param {number} distance
+ * @return {Object} {x, y, textAlign, textVerticalAlign}
+ */
+export function adjustTextPositionOnRect(textPosition, rect, distance) {
+    var dummyStyle = {textPosition: textPosition, textDistance: distance};
+    return calculateTextPosition({}, dummyStyle, rect);
 }
 
 /**
@@ -295,7 +314,7 @@ function prepareTruncateOptions(containerWidth, font, ellipsis, options) {
         contentWidth -= ascCharWidth;
     }
 
-    var ellipsisWidth = getWidth(ellipsis);
+    var ellipsisWidth = getWidth(ellipsis, font);
     if (ellipsisWidth > contentWidth) {
         ellipsis = '';
         ellipsisWidth = 0;
@@ -326,7 +345,7 @@ function truncateSingleLine(textLine, options) {
         return textLine;
     }
 
-    for (var j = 0;; j++) {
+    for (var j = 0; ; j++) {
         if (lineWidth <= contentWidth || j >= options.maxIterations) {
             textLine += options.ellipsis;
             break;
@@ -394,10 +413,10 @@ methods.measureText = function (text, font) {
  * @return {Object} block: {lineHeight, lines, height, outerHeight}
  *  Notice: for performance, do not calculate outerWidth util needed.
  */
-export function parsePlainText(text, font, padding, truncate) {
+export function parsePlainText(text, font, padding, textLineHeight, truncate) {
     text != null && (text += '');
 
-    var lineHeight = getLineHeight(font);
+    var lineHeight = retrieve2(textLineHeight, getLineHeight(font));
     var lines = text ? text.split('\n') : [];
     var height = lines.length * lineHeight;
     var outerHeight = height;

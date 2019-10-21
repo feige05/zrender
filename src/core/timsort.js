@@ -245,7 +245,10 @@ function TimSort(array, compare) {
         while (stackSize > 1) {
             var n = stackSize - 2;
 
-            if (n >= 1 && runLength[n - 1] <= runLength[n] + runLength[n + 1] || n >= 2 && runLength[n - 2] <= runLength[n] + runLength[n - 1]) {
+            if (
+                (n >= 1 && runLength[n - 1] <= runLength[n] + runLength[n + 1])
+                || (n >= 2 && runLength[n - 2] <= runLength[n] + runLength[n - 1])
+            ) {
                 if (runLength[n - 1] < runLength[n + 1]) {
                     n--;
                 }
@@ -335,7 +338,9 @@ function TimSort(array, compare) {
         }
 
         var _minGallop = minGallop;
-        var count1, count2, exit;
+        var count1;
+        var count2;
+        var exit;
 
         while (1) {
             count1 = 0;
@@ -450,7 +455,7 @@ function TimSort(array, compare) {
         }
     }
 
-    function mergeHigh (start1, length1, start2, length2) {
+    function mergeHigh(start1, length1, start2, length2) {
         var i = 0;
 
         for (i = 0; i < length2; i++) {

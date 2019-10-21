@@ -35,7 +35,8 @@ if (typeof wx === 'object' && typeof wx.getSystemInfoSync === 'function') {
         wxa: true, // Weixin Application
         canvasSupported: true,
         svgSupported: false,
-        touchEventsSupported: true
+        touchEventsSupported: true,
+        domSupported: false
     };
 }
 else if (typeof document === 'undefined' && typeof self !== 'undefined') {
@@ -45,7 +46,8 @@ else if (typeof document === 'undefined' && typeof self !== 'undefined') {
         os: {},
         node: false,
         worker: true,
-        canvasSupported: true
+        canvasSupported: true,
+        domSupported: false
     };
 }
 else if (typeof navigator === 'undefined') {
@@ -57,7 +59,8 @@ else if (typeof navigator === 'undefined') {
         worker: false,
         // Assume canvas is supported
         canvasSupported: true,
-        svgSupported: true
+        svgSupported: true,
+        domSupported: false
     };
 }
 else {
@@ -166,8 +169,9 @@ function detect(ua) {
             // events currently. So we dont use that on other browsers unless tested sufficiently.
             // Although IE 10 supports pointer event, it use old style and is different from the
             // standard. So we exclude that. (IE 10 is hardly used on touch device)
-            && (browser.edge || (browser.ie && browser.version >= 11))
+            && (browser.edge || (browser.ie && browser.version >= 11)),
         // passiveSupported: detectPassiveSupport()
+        domSupported: typeof document !== 'undefined'
     };
 }
 
@@ -254,7 +258,7 @@ function $override(name, fn) {
  * @return {*} new
  */
 function clone(source) {
-    if (source == null || typeof source != 'object') {
+    if (source == null || typeof source !== 'object') {
         return source;
     }
 
@@ -458,13 +462,13 @@ function mixin(target, source, overlay) {
  * @param {Array|TypedArray} data
  */
 function isArrayLike(data) {
-    if (! data) {
+    if (!data) {
         return;
     }
-    if (typeof data == 'string') {
+    if (typeof data === 'string') {
         return false;
     }
-    return typeof data.length == 'number';
+    return typeof data.length === 'number';
 }
 
 /**
@@ -648,7 +652,7 @@ function isObject(value) {
     // Avoid a V8 JIT bug in Chrome 19-20.
     // See https://code.google.com/p/v8/issues/detail?id=2291 for more details.
     var type = typeof value;
-    return type === 'function' || (!!value && type == 'object');
+    return type === 'function' || (!!value && type === 'object');
 }
 
 /**
@@ -1308,6 +1312,8 @@ var arrySlice = Array.prototype.slice;
  *        param: {string} eventType
  *        param: {string|Object} query
  *        return: {boolean}
+ * @param {Function} [eventProcessor.afterTrigger] Call after all handlers called.
+ *        param: {string} eventType
  */
 var Eventful = function (eventProcessor) {
     this._$handlers = {};
@@ -1327,38 +1333,7 @@ Eventful.prototype = {
      * @param {Object} context
      */
     one: function (event, query, handler, context) {
-        var _h = this._$handlers;
-
-        if (typeof query === 'function') {
-            context = handler;
-            handler = query;
-            query = null;
-        }
-
-        if (!handler || !event) {
-            return this;
-        }
-
-        query = normalizeQuery(this, query);
-
-        if (!_h[event]) {
-            _h[event] = [];
-        }
-
-        for (var i = 0; i < _h[event].length; i++) {
-            if (_h[event][i].h === handler) {
-                return this;
-            }
-        }
-
-        _h[event].push({
-            h: handler,
-            one: true,
-            query: query,
-            ctx: context || this
-        });
-
-        return this;
+        return on(this, event, query, handler, context, true);
     },
 
     /**
@@ -1370,38 +1345,7 @@ Eventful.prototype = {
      * @param {Object} [context]
      */
     on: function (event, query, handler, context) {
-        var _h = this._$handlers;
-
-        if (typeof query === 'function') {
-            context = handler;
-            handler = query;
-            query = null;
-        }
-
-        if (!handler || !event) {
-            return this;
-        }
-
-        query = normalizeQuery(this, query);
-
-        if (!_h[event]) {
-            _h[event] = [];
-        }
-
-        for (var i = 0; i < _h[event].length; i++) {
-            if (_h[event][i].h === handler) {
-                return this;
-            }
-        }
-
-        _h[event].push({
-            h: handler,
-            one: false,
-            query: query,
-            ctx: context || this
-        });
-
-        return this;
+        return on(this, event, query, handler, context, false);
     },
 
     /**
@@ -1412,7 +1356,7 @@ Eventful.prototype = {
      */
     isSilent: function (event) {
         var _h = this._$handlers;
-        return _h[event] && _h[event].length;
+        return !_h[event] || !_h[event].length;
     },
 
     /**
@@ -1433,7 +1377,7 @@ Eventful.prototype = {
             if (_h[event]) {
                 var newList = [];
                 for (var i = 0, l = _h[event].length; i < l; i++) {
-                    if (_h[event][i].h != handler) {
+                    if (_h[event][i].h !== handler) {
                         newList.push(_h[event][i]);
                     }
                 }
@@ -1457,7 +1401,10 @@ Eventful.prototype = {
      * @param {string} type The event name.
      */
     trigger: function (type) {
-        if (this._$handlers[type]) {
+        var _h = this._$handlers[type];
+        var eventProcessor = this._$eventProcessor;
+
+        if (_h) {
             var args = arguments;
             var argLen = args.length;
             var eventProcessor = this._$eventProcessor;
@@ -1466,7 +1413,6 @@ Eventful.prototype = {
                 args = arrySlice.call(args, 1);
             }
 
-            var _h = this._$handlers[type];
             var len = _h.length;
             for (var i = 0; i < len;) {
                 var hItem = _h[i];
@@ -1506,6 +1452,9 @@ Eventful.prototype = {
             }
         }
 
+        eventProcessor && eventProcessor.afterTrigger
+            && eventProcessor.afterTrigger(type);
+
         return this;
     },
 
@@ -1515,7 +1464,10 @@ Eventful.prototype = {
      * @param {string} type The event name.
      */
     triggerWithContext: function (type) {
-        if (this._$handlers[type]) {
+        var _h = this._$handlers[type];
+        var eventProcessor = this._$eventProcessor;
+
+        if (_h) {
             var args = arguments;
             var argLen = args.length;
             var eventProcessor = this._$eventProcessor;
@@ -1525,7 +1477,6 @@ Eventful.prototype = {
             }
             var ctx = args[args.length - 1];
 
-            var _h = this._$handlers[type];
             var len = _h.length;
             for (var i = 0; i < len;) {
                 var hItem = _h[i];
@@ -1565,6 +1516,9 @@ Eventful.prototype = {
             }
         }
 
+        eventProcessor && eventProcessor.afterTrigger
+            && eventProcessor.afterTrigger(type);
+
         return this;
     }
 };
@@ -1577,97 +1531,183 @@ function normalizeQuery(host, query) {
     return query;
 }
 
-// ----------------------
-// The events in zrender
-// ----------------------
+function on(eventful, event, query, handler, context, isOnce) {
+    var _h = eventful._$handlers;
+
+    if (typeof query === 'function') {
+        context = handler;
+        handler = query;
+        query = null;
+    }
+
+    if (!handler || !event) {
+        return eventful;
+    }
+
+    query = normalizeQuery(eventful, query);
+
+    if (!_h[event]) {
+        _h[event] = [];
+    }
+
+    for (var i = 0; i < _h[event].length; i++) {
+        if (_h[event][i].h === handler) {
+            return eventful;
+        }
+    }
+
+    var wrap = {
+        h: handler,
+        one: isOnce,
+        query: query,
+        ctx: context || eventful,
+        // FIXME
+        // Do not publish this feature util it is proved that it makes sense.
+        callAtLast: handler.zrEventfulCallAtLast
+    };
+
+    var lastIndex = _h[event].length - 1;
+    var lastWrap = _h[event][lastIndex];
+    (lastWrap && lastWrap.callAtLast)
+        ? _h[event].splice(lastIndex, 0, wrap)
+        : _h[event].push(wrap);
+
+    return eventful;
+}
 
 /**
- * @event module:zrender/mixin/Eventful#onclick
- * @type {Function}
- * @default null
- */
-/**
- * @event module:zrender/mixin/Eventful#onmouseover
- * @type {Function}
- * @default null
- */
-/**
- * @event module:zrender/mixin/Eventful#onmouseout
- * @type {Function}
- * @default null
- */
-/**
- * @event module:zrender/mixin/Eventful#onmousemove
- * @type {Function}
- * @default null
- */
-/**
- * @event module:zrender/mixin/Eventful#onmousewheel
- * @type {Function}
- * @default null
- */
-/**
- * @event module:zrender/mixin/Eventful#onmousedown
- * @type {Function}
- * @default null
- */
-/**
- * @event module:zrender/mixin/Eventful#onmouseup
- * @type {Function}
- * @default null
- */
-/**
- * @event module:zrender/mixin/Eventful#ondrag
- * @type {Function}
- * @default null
- */
-/**
- * @event module:zrender/mixin/Eventful#ondragstart
- * @type {Function}
- * @default null
- */
-/**
- * @event module:zrender/mixin/Eventful#ondragend
- * @type {Function}
- * @default null
- */
-/**
- * @event module:zrender/mixin/Eventful#ondragenter
- * @type {Function}
- * @default null
- */
-/**
- * @event module:zrender/mixin/Eventful#ondragleave
- * @type {Function}
- * @default null
- */
-/**
- * @event module:zrender/mixin/Eventful#ondragover
- * @type {Function}
- * @default null
- */
-/**
- * @event module:zrender/mixin/Eventful#ondrop
- * @type {Function}
- * @default null
+ * The algoritm is learnt from
+ * https://franklinta.com/2014/09/08/computing-css-matrix3d-transforms/
+ * And we made some optimization for matrix inversion.
+ * Other similar approaches:
+ * "cv::getPerspectiveTransform", "Direct Linear Transformation".
  */
 
+var LN2 = Math.log(2);
+
+function determinant(rows, rank, rowStart, rowMask, colMask, detCache) {
+    var cacheKey = rowMask + '-' + colMask;
+    var fullRank = rows.length;
+
+    if (detCache.hasOwnProperty(cacheKey)) {
+        return detCache[cacheKey];
+    }
+
+    if (rank === 1) {
+        // In this case the colMask must be like: `11101111`. We can find the place of `0`.
+        var colStart = Math.round(Math.log(((1 << fullRank) - 1) & ~colMask) / LN2);
+        return rows[rowStart][colStart];
+    }
+
+    var subRowMask = rowMask | (1 << rowStart);
+    var subRowStart = rowStart + 1;
+    while (rowMask & (1 << subRowStart)) {
+        subRowStart++;
+    }
+
+    var sum = 0;
+    for (var j = 0, colLocalIdx = 0; j < fullRank; j++) {
+        var colTag = 1 << j;
+        if (!(colTag & colMask)) {
+            sum += (colLocalIdx % 2 ? -1 : 1) * rows[rowStart][j]
+                // det(subMatrix(0, j))
+                * determinant(rows, rank - 1, subRowStart, subRowMask, colMask | colTag, detCache);
+            colLocalIdx++;
+        }
+    }
+
+    detCache[cacheKey] = sum;
+
+    return sum;
+}
+
 /**
- * 事件辅助类
- * @module zrender/core/event
- * @author Kener (@Kener-林峰, kener.linfeng@gmail.com)
+ * Usage:
+ * ```js
+ * var transformer = buildTransformer(
+ *     [10, 44, 100, 44, 100, 300, 10, 300],
+ *     [50, 54, 130, 14, 140, 330, 14, 220]
+ * );
+ * var out = [];
+ * transformer && transformer([11, 33], out);
+ * ```
+ *
+ * Notice: `buildTransformer` may take more than 10ms in some Android device.
+ *
+ * @param {Array.<number>} src source four points, [x0, y0, x1, y1, x2, y2, x3, y3]
+ * @param {Array.<number>} dest destination four points, [x0, y0, x1, y1, x2, y2, x3, y3]
+ * @return {Function} transformer If fail, return null/undefined.
+ */
+function buildTransformer(src, dest) {
+    var mA = [
+        [src[0], src[1], 1, 0, 0, 0, -dest[0] * src[0], -dest[0] * src[1]],
+        [0, 0, 0, src[0], src[1], 1, -dest[1] * src[0], -dest[1] * src[1]],
+        [src[2], src[3], 1, 0, 0, 0, -dest[2] * src[2], -dest[2] * src[3]],
+        [0, 0, 0, src[2], src[3], 1, -dest[3] * src[2], -dest[3] * src[3]],
+        [src[4], src[5], 1, 0, 0, 0, -dest[4] * src[4], -dest[4] * src[5]],
+        [0, 0, 0, src[4], src[5], 1, -dest[5] * src[4], -dest[5] * src[5]],
+        [src[6], src[7], 1, 0, 0, 0, -dest[6] * src[6], -dest[6] * src[7]],
+        [0, 0, 0, src[6], src[7], 1, -dest[7] * src[6], -dest[7] * src[7]]
+    ];
+
+    var detCache = {};
+    var det = determinant(mA, 8, 0, 0, 0, detCache);
+    if (det === 0) {
+        return;
+    }
+
+    // `invert(mA) * dest`, that is, `adj(mA) / det * dest`.
+    var vh = [];
+    for (var i = 0; i < 8; i++) {
+        for (var j = 0; j < 8; j++) {
+            vh[j] == null && (vh[j] = 0);
+            vh[j] += ((i + j) % 2 ? -1 : 1)
+                // det(subMatrix(i, j))
+                * determinant(mA, 7, i === 0 ? 1 : 0, 1 << i, 1 << j, detCache)
+                / det * dest[i];
+        }
+    }
+
+    return function (out, srcPointX, srcPointY) {
+        var pk = srcPointX * vh[6] + srcPointY * vh[7] + 1;
+        out[0] = (srcPointX * vh[0] + srcPointY * vh[1] + vh[2]) / pk;
+        out[1] = (srcPointX * vh[3] + srcPointY * vh[4] + vh[5]) / pk;
+    };
+}
+
+/**
+ * Utilities for mouse or touch events.
  */
 
 var isDomLevel2 = (typeof window !== 'undefined') && !!window.addEventListener;
 
 var MOUSE_EVENT_REG = /^(?:mouse|pointer|contextmenu|drag|drop)|click/;
+var EVENT_SAVED_PROP = '___zrEVENTSAVED';
+var _calcOut = [];
 
-function getBoundingClientRect(el) {
-    // BlackBerry 5, iOS 3 (original iPhone) don't have getBoundingRect
-    return el.getBoundingClientRect ? el.getBoundingClientRect() : {left: 0, top: 0};
-}
-
-// `calculate` is optional, default false
+/**
+ * Get the `zrX` and `zrY`, which are relative to the top-left of
+ * the input `el`.
+ * CSS transform (2D & 3D) is supported.
+ *
+ * The strategy to fetch the coords:
+ * + If `calculate` is not set as `true`, users of this method should
+ * ensure that `el` is the same or the same size & location as `e.target`.
+ * Otherwise the result coords are probably not expected. Because we
+ * firstly try to get coords from e.offsetX/e.offsetY.
+ * + If `calculate` is set as `true`, the input `el` can be any element
+ * and we force to calculate the coords based on `el`.
+ * + The input `el` should be positionable (not position:static).
+ *
+ * The force `calculate` can be used in case like:
+ * When mousemove event triggered on ec tooltip, `e.target` is not `el`(zr painter.dom).
+ *
+ * @param {HTMLElement} el DOM element.
+ * @param {Event} e Mouse event or touch event.
+ * @param {Object} out Get `out.zrX` and `out.zrY` as the result.
+ * @param {boolean} [calculate=false] Whether to force calculate
+ *        the coordinates but not use ones provided by browser.
+ */
 function clientToLocal(el, e, out, calculate) {
     out = out || {};
 
@@ -1678,12 +1718,8 @@ function clientToLocal(el, e, out, calculate) {
     // (see http://www.jacklmoore.com/notes/mouse-position/)
     // In zr painter.dom, padding edge equals to border edge.
 
-    // FIXME
-    // When mousemove event triggered on ec tooltip, target is not zr painter.dom, and
-    // offsetX/Y is relative to e.target, where the calculation of zrX/Y via offsetX/Y
-    // is too complex. So css-transfrom dont support in this case temporarily.
     if (calculate || !env$1.canvasSupported) {
-        defaultGetZrXY(el, e, out);
+        calculateZrXY(el, e, out);
     }
     // Caution: In FireFox, layerX/layerY Mouse position relative to the closest positioned
     // ancestor element, so we should make sure el is positioned (e.g., not position:static).
@@ -1703,22 +1739,125 @@ function clientToLocal(el, e, out, calculate) {
     }
     // For some other device, e.g., IOS safari.
     else {
-        defaultGetZrXY(el, e, out);
+        calculateZrXY(el, e, out);
     }
 
     return out;
 }
 
-function defaultGetZrXY(el, e, out) {
-    // This well-known method below does not support css transform.
-    var box = getBoundingClientRect(el);
-    out.zrX = e.clientX - box.left;
-    out.zrY = e.clientY - box.top;
+function calculateZrXY(el, e, out) {
+    // BlackBerry 5, iOS 3 (original iPhone) don't have getBoundingRect.
+    if (el.getBoundingClientRect && env$1.domSupported) {
+        var ex = e.clientX;
+        var ey = e.clientY;
+
+        if (el.nodeName.toUpperCase() === 'CANVAS') {
+            // Original approach, which do not support CSS transform.
+            // marker can not be locationed in a canvas container
+            // (getBoundingClientRect is always 0). We do not support
+            // that input a pre-created canvas to zr while using css
+            // transform in iOS.
+            var box = el.getBoundingClientRect();
+            out.zrX = ex - box.left;
+            out.zrY = ey - box.top;
+            return;
+        }
+        else {
+            var saved = el[EVENT_SAVED_PROP] || (el[EVENT_SAVED_PROP] = {});
+            var transformer = preparePointerTransformer(prepareCoordMarkers(el, saved), saved);
+            if (transformer) {
+                transformer(_calcOut, ex, ey);
+                out.zrX = _calcOut[0];
+                out.zrY = _calcOut[1];
+                return;
+            }
+        }
+    }
+    out.zrX = out.zrY = 0;
+}
+
+function prepareCoordMarkers(el, saved) {
+    var markers = saved.markers;
+    if (markers) {
+        return markers;
+    }
+
+    markers = saved.markers = [];
+    var propLR = ['left', 'right'];
+    var propTB = ['top', 'bottom'];
+
+    for (var i = 0; i < 4; i++) {
+        var marker = document.createElement('div');
+        var stl = marker.style;
+        var idxLR = i % 2;
+        var idxTB = (i >> 1) % 2;
+        stl.cssText = [
+            'position:absolute',
+            'visibility: hidden',
+            'padding: 0',
+            'margin: 0',
+            'border-width: 0',
+            'width:0',
+            'height:0',
+            // 'width: 5px',
+            // 'height: 5px',
+            propLR[idxLR] + ':0',
+            propTB[idxTB] + ':0',
+            propLR[1 - idxLR] + ':auto',
+            propTB[1 - idxTB] + ':auto',
+            ''
+        ].join('!important;');
+        el.appendChild(marker);
+        markers.push(marker);
+    }
+
+    return markers;
+}
+
+function preparePointerTransformer(markers, saved) {
+    var transformer = saved.transformer;
+    var oldSrcCoords = saved.srcCoords;
+    var useOld = true;
+    var srcCoords = [];
+    var destCoords = [];
+
+    for (var i = 0; i < 4; i++) {
+        var rect = markers[i].getBoundingClientRect();
+        var ii = 2 * i;
+        var x = rect.left;
+        var y = rect.top;
+        srcCoords.push(x, y);
+        useOld &= oldSrcCoords && x === oldSrcCoords[ii] && y === oldSrcCoords[ii + 1];
+        destCoords.push(markers[i].offsetLeft, markers[i].offsetTop);
+    }
+
+    // Cache to avoid time consuming of `buildTransformer`.
+    return useOld
+        ? transformer
+        : (
+            saved.srcCoords = srcCoords,
+            saved.transformer = buildTransformer(srcCoords, destCoords)
+        );
 }
 
 /**
- * 如果存在第三方嵌入的一些dom触发的事件，或touch事件，需要转换一下事件坐标.
- * `calculate` is optional, default false.
+ * Normalize the coordinates of the input event.
+ *
+ * Get the `e.zrX` and `e.zrY`, which are relative to the top-left of
+ * the input `el`.
+ * Get `e.zrDelta` if using mouse wheel.
+ * Get `e.which`, see the comment inside this function.
+ *
+ * Do not calculate repeatly if `zrX` and `zrY` already exist.
+ *
+ * Notice: see comments in `clientToLocal`. check the relationship
+ * between the result coords and the parameters `el` and `calculate`.
+ *
+ * @param {HTMLElement} el DOM element.
+ * @param {Event} [e] Mouse event or touch event. For lagency IE,
+ *        do not need to input it and `window.event` is used.
+ * @param {boolean} [calculate=false] Whether to force calculate
+ *        the coordinates but not use ones provided by browser.
  */
 function normalizeEvent(el, e, calculate) {
 
@@ -1736,7 +1875,7 @@ function normalizeEvent(el, e, calculate) {
         e.zrDelta = (e.wheelDelta) ? e.wheelDelta / 120 : -(e.detail || 0) / 3;
     }
     else {
-        var touch = eventType != 'touchend'
+        var touch = eventType !== 'touchend'
             ? e.targetTouches[0]
             : e.changedTouches[0];
         touch && clientToLocal(el, touch, e, calculate);
@@ -1744,12 +1883,16 @@ function normalizeEvent(el, e, calculate) {
 
     // Add which for click: 1 === left; 2 === middle; 3 === right; otherwise: 0;
     // See jQuery: https://github.com/jquery/jquery/blob/master/src/event.js
-    // If e.which has been defined, if may be readonly,
+    // If e.which has been defined, it may be readonly,
     // see: https://developer.mozilla.org/en-US/docs/Web/API/MouseEvent/which
     var button = e.button;
     if (e.which == null && button !== undefined && MOUSE_EVENT_REG.test(e.type)) {
         e.which = (button & 1 ? 1 : (button & 2 ? 3 : (button & 4 ? 2 : 0)));
     }
+    // [Caution]: `e.which` from browser is not always reliable. For example,
+    // when press left button and `mousemove (pointermove)` in Edge, the `e.which`
+    // is 65536 and the `e.button` is -1. But the `mouseup (pointerup)` and
+    // `mousedown (pointerdown)` is the same as Chrome does.
 
     return e;
 }
@@ -1800,12 +1943,10 @@ function removeEventListener(el, name, handler) {
 
 /**
  * preventDefault and stopPropagation.
- * Notice: do not do that in zrender. Upper application
- * do that if necessary.
+ * Notice: do not use this method in zrender. It can only be
+ * used by upper applications if necessary.
  *
- * @memberOf module:zrender/core/event
- * @method
- * @param {Event} e : event对象
+ * @param {Event} e A mouse or touch event.
  */
 var stop = isDomLevel2
     ? function (e) {
@@ -1818,9 +1959,133 @@ var stop = isDomLevel2
         e.cancelBubble = true;
     };
 
+/**
+ * This method only works for mouseup and mousedown. The functionality is restricted
+ * for fault tolerance, See the `e.which` compatibility above.
+ *
+ * @param {MouseEvent} e
+ * @return {boolean}
+ */
 
 
-// 做向上兼容
+/**
+ * To be removed.
+ * @deprecated
+ */
+
+/**
+ * Only implements needed gestures for mobile.
+ */
+
+var GestureMgr = function () {
+
+    /**
+     * @private
+     * @type {Array.<Object>}
+     */
+    this._track = [];
+};
+
+GestureMgr.prototype = {
+
+    constructor: GestureMgr,
+
+    recognize: function (event, target, root) {
+        this._doTrack(event, target, root);
+        return this._recognize(event);
+    },
+
+    clear: function () {
+        this._track.length = 0;
+        return this;
+    },
+
+    _doTrack: function (event, target, root) {
+        var touches = event.touches;
+
+        if (!touches) {
+            return;
+        }
+
+        var trackItem = {
+            points: [],
+            touches: [],
+            target: target,
+            event: event
+        };
+
+        for (var i = 0, len = touches.length; i < len; i++) {
+            var touch = touches[i];
+            var pos = clientToLocal(root, touch, {});
+            trackItem.points.push([pos.zrX, pos.zrY]);
+            trackItem.touches.push(touch);
+        }
+
+        this._track.push(trackItem);
+    },
+
+    _recognize: function (event) {
+        for (var eventName in recognizers) {
+            if (recognizers.hasOwnProperty(eventName)) {
+                var gestureInfo = recognizers[eventName](this._track, event);
+                if (gestureInfo) {
+                    return gestureInfo;
+                }
+            }
+        }
+    }
+};
+
+function dist$1(pointPair) {
+    var dx = pointPair[1][0] - pointPair[0][0];
+    var dy = pointPair[1][1] - pointPair[0][1];
+
+    return Math.sqrt(dx * dx + dy * dy);
+}
+
+function center(pointPair) {
+    return [
+        (pointPair[0][0] + pointPair[1][0]) / 2,
+        (pointPair[0][1] + pointPair[1][1]) / 2
+    ];
+}
+
+var recognizers = {
+
+    pinch: function (track, event) {
+        var trackLen = track.length;
+
+        if (!trackLen) {
+            return;
+        }
+
+        var pinchEnd = (track[trackLen - 1] || {}).points;
+        var pinchPre = (track[trackLen - 2] || {}).points || pinchEnd;
+
+        if (pinchPre
+            && pinchPre.length > 1
+            && pinchEnd
+            && pinchEnd.length > 1
+        ) {
+            var pinchScale = dist$1(pinchEnd) / dist$1(pinchPre);
+            !isFinite(pinchScale) && (pinchScale = 1);
+
+            event.pinchScale = pinchScale;
+
+            var pinchCenter = center(pinchEnd);
+            event.pinchX = pinchCenter[0];
+            event.pinchY = pinchCenter[1];
+
+            return {
+                type: 'pinch',
+                target: track[0].target,
+                event: event
+            };
+        }
+    }
+
+    // Only pinch currently.
+};
 
 var SILENT = 'silent';
 
@@ -1850,7 +2115,7 @@ function stopEvent(event) {
     stop(this.event);
 }
 
-function EmptyProxy () {}
+function EmptyProxy() {}
 EmptyProxy.prototype.dispose = function () {};
 
 var handlerNames = [
@@ -1866,7 +2131,7 @@ var handlerNames = [
  * @param {module:zrender/dom/HandlerProxy} proxy HandlerProxy instance.
  * @param {HTMLElement} painterRoot painter.root (not painter.getViewportRoot()).
  */
-var Handler = function(storage, painter, proxy, painterRoot) {
+var Handler = function (storage, painter, proxy, painterRoot) {
     Eventful.call(this);
 
     this.storage = storage;
@@ -1906,6 +2171,12 @@ var Handler = function(storage, painter, proxy, painterRoot) {
      * @type {number}
      */
     this._lastY;
+
+    /**
+     * @private
+     * @type {module:zrender/core/GestureMgr}
+     */
+    this._gestureMgr;
 
 
     Draggable.call(this);
@@ -1981,7 +2252,7 @@ Handler.prototype = {
         do {
             element = element && element.parentNode;
         }
-        while (element && element.nodeType != 9 && !(
+        while (element && element.nodeType !== 9 && !(
             innerDom = element === this.painterRoot
         ));
 
@@ -2062,7 +2333,7 @@ Handler.prototype = {
             // 分发事件到用户自定义层
             // 用户有可能在全局 click 事件中 dispose，所以需要判断下 painter 是否存在
             this.painter && this.painter.eachOtherLayer(function (layer) {
-                if (typeof(layer[eventHandler]) == 'function') {
+                if (typeof (layer[eventHandler]) === 'function') {
                     layer[eventHandler].call(layer, eventPacket);
                 }
                 if (layer.trigger) {
@@ -2080,11 +2351,11 @@ Handler.prototype = {
      * @return {model:zrender/Element}
      * @method
      */
-    findHover: function(x, y, exclude) {
+    findHover: function (x, y, exclude) {
         var list = this.storage.getDisplayList();
         var out = {x: x, y: y};
 
-        for (var i = list.length - 1; i >= 0 ; i--) {
+        for (var i = list.length - 1; i >= 0; i--) {
             var hoverCheckResult;
             if (list[i] !== exclude
                 // getDisplayList may include ignored item in VML mode
@@ -2100,6 +2371,31 @@ Handler.prototype = {
         }
 
         return out;
+    },
+
+    processGesture: function (event, stage) {
+        if (!this._gestureMgr) {
+            this._gestureMgr = new GestureMgr();
+        }
+        var gestureMgr = this._gestureMgr;
+
+        stage === 'start' && gestureMgr.clear();
+
+        var gestureInfo = gestureMgr.recognize(
+            event,
+            this.findHover(event.zrX, event.zrY, null).target,
+            this.proxy.dom
+        );
+
+        stage === 'end' && gestureMgr.clear();
+
+        // Do not do any preventDefault here. Upper application do that if necessary.
+        if (gestureInfo) {
+            var type = gestureInfo.type;
+            event.gestureEvent = type;
+
+            this.dispatchToElement({target: gestureInfo.target}, type, gestureInfo.event);
+        }
     }
 };
 
@@ -2146,7 +2442,7 @@ function isHover(displayable, x, y) {
             // If clipped by ancestor.
             // FIXME: If clipPath has neither stroke nor fill,
             // el.clipPath.contain(x, y) will always return false.
-            if (el.clipPath && !el.clipPath.contain(x, y))  {
+            if (el.clipPath && !el.clipPath.contain(x, y)) {
                 return false;
             }
             if (el.silent) {
@@ -2170,7 +2466,7 @@ mixin(Handler, Draggable);
 
 var ArrayCtor$1 = typeof Float32Array === 'undefined'
     ? Array
-   : Float32Array;
+    : Float32Array;
 
 /**
  * Create a identity matrix.
@@ -2854,13 +3150,14 @@ var easing = {
             return 1;
         }
         if (!a || a < 1) {
-            a = 1; s = p / 4;
+            a = 1;
+            s = p / 4;
         }
         else {
             s = p * Math.asin(1 / a) / (2 * Math.PI);
         }
-        return -(a * Math.pow(2, 10 * (k -= 1)) *
-                    Math.sin((k - s) * (2 * Math.PI) / p));
+        return -(a * Math.pow(2, 10 * (k -= 1))
+                    * Math.sin((k - s) * (2 * Math.PI) / p));
     },
     /**
     * @param {number} k
@@ -2877,13 +3174,14 @@ var easing = {
             return 1;
         }
         if (!a || a < 1) {
-            a = 1; s = p / 4;
+            a = 1;
+            s = p / 4;
         }
         else {
             s = p * Math.asin(1 / a) / (2 * Math.PI);
         }
-        return (a * Math.pow(2, -10 * k) *
-                Math.sin((k - s) * (2 * Math.PI) / p) + 1);
+        return (a * Math.pow(2, -10 * k)
+                    * Math.sin((k - s) * (2 * Math.PI) / p) + 1);
     },
     /**
     * @param {number} k
@@ -2900,7 +3198,8 @@ var easing = {
             return 1;
         }
         if (!a || a < 1) {
-            a = 1; s = p / 4;
+            a = 1;
+            s = p / 4;
         }
         else {
             s = p * Math.asin(1 / a) / (2 * Math.PI);
@@ -3050,7 +3349,7 @@ Clip.prototype = {
         percent = Math.min(percent, 1);
 
         var easing$$1 = this.easing;
-        var easingFunc = typeof easing$$1 == 'string' ? easing[easing$$1] : easing$$1;
+        var easingFunc = typeof easing$$1 === 'string' ? easing[easing$$1] : easing$$1;
         var schedule = typeof easingFunc === 'function'
             ? easingFunc(percent)
             : percent;
@@ -3058,9 +3357,9 @@ Clip.prototype = {
         this.fire('frame', schedule);
 
         // 结束
-        if (percent == 1) {
+        if (percent === 1) {
             if (this.loop) {
-                this.restart (globalTime);
+                this.restart(globalTime);
                 // 重新开始周期
                 // 抛出而不是直接调用事件直到 stage.update 后再统一调用这些事件
                 return 'restart';
@@ -3294,80 +3593,80 @@ LRUProto.clear = function () {
 };
 
 var kCSSColorTable = {
-    'transparent': [0,0,0,0], 'aliceblue': [240,248,255,1],
-    'antiquewhite': [250,235,215,1], 'aqua': [0,255,255,1],
-    'aquamarine': [127,255,212,1], 'azure': [240,255,255,1],
-    'beige': [245,245,220,1], 'bisque': [255,228,196,1],
-    'black': [0,0,0,1], 'blanchedalmond': [255,235,205,1],
-    'blue': [0,0,255,1], 'blueviolet': [138,43,226,1],
-    'brown': [165,42,42,1], 'burlywood': [222,184,135,1],
-    'cadetblue': [95,158,160,1], 'chartreuse': [127,255,0,1],
-    'chocolate': [210,105,30,1], 'coral': [255,127,80,1],
-    'cornflowerblue': [100,149,237,1], 'cornsilk': [255,248,220,1],
-    'crimson': [220,20,60,1], 'cyan': [0,255,255,1],
-    'darkblue': [0,0,139,1], 'darkcyan': [0,139,139,1],
-    'darkgoldenrod': [184,134,11,1], 'darkgray': [169,169,169,1],
-    'darkgreen': [0,100,0,1], 'darkgrey': [169,169,169,1],
-    'darkkhaki': [189,183,107,1], 'darkmagenta': [139,0,139,1],
-    'darkolivegreen': [85,107,47,1], 'darkorange': [255,140,0,1],
-    'darkorchid': [153,50,204,1], 'darkred': [139,0,0,1],
-    'darksalmon': [233,150,122,1], 'darkseagreen': [143,188,143,1],
-    'darkslateblue': [72,61,139,1], 'darkslategray': [47,79,79,1],
-    'darkslategrey': [47,79,79,1], 'darkturquoise': [0,206,209,1],
-    'darkviolet': [148,0,211,1], 'deeppink': [255,20,147,1],
-    'deepskyblue': [0,191,255,1], 'dimgray': [105,105,105,1],
-    'dimgrey': [105,105,105,1], 'dodgerblue': [30,144,255,1],
-    'firebrick': [178,34,34,1], 'floralwhite': [255,250,240,1],
-    'forestgreen': [34,139,34,1], 'fuchsia': [255,0,255,1],
-    'gainsboro': [220,220,220,1], 'ghostwhite': [248,248,255,1],
-    'gold': [255,215,0,1], 'goldenrod': [218,165,32,1],
-    'gray': [128,128,128,1], 'green': [0,128,0,1],
-    'greenyellow': [173,255,47,1], 'grey': [128,128,128,1],
-    'honeydew': [240,255,240,1], 'hotpink': [255,105,180,1],
-    'indianred': [205,92,92,1], 'indigo': [75,0,130,1],
-    'ivory': [255,255,240,1], 'khaki': [240,230,140,1],
-    'lavender': [230,230,250,1], 'lavenderblush': [255,240,245,1],
-    'lawngreen': [124,252,0,1], 'lemonchiffon': [255,250,205,1],
-    'lightblue': [173,216,230,1], 'lightcoral': [240,128,128,1],
-    'lightcyan': [224,255,255,1], 'lightgoldenrodyellow': [250,250,210,1],
-    'lightgray': [211,211,211,1], 'lightgreen': [144,238,144,1],
-    'lightgrey': [211,211,211,1], 'lightpink': [255,182,193,1],
-    'lightsalmon': [255,160,122,1], 'lightseagreen': [32,178,170,1],
-    'lightskyblue': [135,206,250,1], 'lightslategray': [119,136,153,1],
-    'lightslategrey': [119,136,153,1], 'lightsteelblue': [176,196,222,1],
-    'lightyellow': [255,255,224,1], 'lime': [0,255,0,1],
-    'limegreen': [50,205,50,1], 'linen': [250,240,230,1],
-    'magenta': [255,0,255,1], 'maroon': [128,0,0,1],
-    'mediumaquamarine': [102,205,170,1], 'mediumblue': [0,0,205,1],
-    'mediumorchid': [186,85,211,1], 'mediumpurple': [147,112,219,1],
-    'mediumseagreen': [60,179,113,1], 'mediumslateblue': [123,104,238,1],
-    'mediumspringgreen': [0,250,154,1], 'mediumturquoise': [72,209,204,1],
-    'mediumvioletred': [199,21,133,1], 'midnightblue': [25,25,112,1],
-    'mintcream': [245,255,250,1], 'mistyrose': [255,228,225,1],
-    'moccasin': [255,228,181,1], 'navajowhite': [255,222,173,1],
-    'navy': [0,0,128,1], 'oldlace': [253,245,230,1],
-    'olive': [128,128,0,1], 'olivedrab': [107,142,35,1],
-    'orange': [255,165,0,1], 'orangered': [255,69,0,1],
-    'orchid': [218,112,214,1], 'palegoldenrod': [238,232,170,1],
-    'palegreen': [152,251,152,1], 'paleturquoise': [175,238,238,1],
-    'palevioletred': [219,112,147,1], 'papayawhip': [255,239,213,1],
-    'peachpuff': [255,218,185,1], 'peru': [205,133,63,1],
-    'pink': [255,192,203,1], 'plum': [221,160,221,1],
-    'powderblue': [176,224,230,1], 'purple': [128,0,128,1],
-    'red': [255,0,0,1], 'rosybrown': [188,143,143,1],
-    'royalblue': [65,105,225,1], 'saddlebrown': [139,69,19,1],
-    'salmon': [250,128,114,1], 'sandybrown': [244,164,96,1],
-    'seagreen': [46,139,87,1], 'seashell': [255,245,238,1],
-    'sienna': [160,82,45,1], 'silver': [192,192,192,1],
-    'skyblue': [135,206,235,1], 'slateblue': [106,90,205,1],
-    'slategray': [112,128,144,1], 'slategrey': [112,128,144,1],
-    'snow': [255,250,250,1], 'springgreen': [0,255,127,1],
-    'steelblue': [70,130,180,1], 'tan': [210,180,140,1],
-    'teal': [0,128,128,1], 'thistle': [216,191,216,1],
-    'tomato': [255,99,71,1], 'turquoise': [64,224,208,1],
-    'violet': [238,130,238,1], 'wheat': [245,222,179,1],
-    'white': [255,255,255,1], 'whitesmoke': [245,245,245,1],
-    'yellow': [255,255,0,1], 'yellowgreen': [154,205,50,1]
+    'transparent': [0, 0, 0, 0], 'aliceblue': [240, 248, 255, 1],
+    'antiquewhite': [250, 235, 215, 1], 'aqua': [0, 255, 255, 1],
+    'aquamarine': [127, 255, 212, 1], 'azure': [240, 255, 255, 1],
+    'beige': [245, 245, 220, 1], 'bisque': [255, 228, 196, 1],
+    'black': [0, 0, 0, 1], 'blanchedalmond': [255, 235, 205, 1],
+    'blue': [0, 0, 255, 1], 'blueviolet': [138, 43, 226, 1],
+    'brown': [165, 42, 42, 1], 'burlywood': [222, 184, 135, 1],
+    'cadetblue': [95, 158, 160, 1], 'chartreuse': [127, 255, 0, 1],
+    'chocolate': [210, 105, 30, 1], 'coral': [255, 127, 80, 1],
+    'cornflowerblue': [100, 149, 237, 1], 'cornsilk': [255, 248, 220, 1],
+    'crimson': [220, 20, 60, 1], 'cyan': [0, 255, 255, 1],
+    'darkblue': [0, 0, 139, 1], 'darkcyan': [0, 139, 139, 1],
+    'darkgoldenrod': [184, 134, 11, 1], 'darkgray': [169, 169, 169, 1],
+    'darkgreen': [0, 100, 0, 1], 'darkgrey': [169, 169, 169, 1],
+    'darkkhaki': [189, 183, 107, 1], 'darkmagenta': [139, 0, 139, 1],
+    'darkolivegreen': [85, 107, 47, 1], 'darkorange': [255, 140, 0, 1],
+    'darkorchid': [153, 50, 204, 1], 'darkred': [139, 0, 0, 1],
+    'darksalmon': [233, 150, 122, 1], 'darkseagreen': [143, 188, 143, 1],
+    'darkslateblue': [72, 61, 139, 1], 'darkslategray': [47, 79, 79, 1],
+    'darkslategrey': [47, 79, 79, 1], 'darkturquoise': [0, 206, 209, 1],
+    'darkviolet': [148, 0, 211, 1], 'deeppink': [255, 20, 147, 1],
+    'deepskyblue': [0, 191, 255, 1], 'dimgray': [105, 105, 105, 1],
+    'dimgrey': [105, 105, 105, 1], 'dodgerblue': [30, 144, 255, 1],
+    'firebrick': [178, 34, 34, 1], 'floralwhite': [255, 250, 240, 1],
+    'forestgreen': [34, 139, 34, 1], 'fuchsia': [255, 0, 255, 1],
+    'gainsboro': [220, 220, 220, 1], 'ghostwhite': [248, 248, 255, 1],
+    'gold': [255, 215, 0, 1], 'goldenrod': [218, 165, 32, 1],
+    'gray': [128, 128, 128, 1], 'green': [0, 128, 0, 1],
+    'greenyellow': [173, 255, 47, 1], 'grey': [128, 128, 128, 1],
+    'honeydew': [240, 255, 240, 1], 'hotpink': [255, 105, 180, 1],
+    'indianred': [205, 92, 92, 1], 'indigo': [75, 0, 130, 1],
+    'ivory': [255, 255, 240, 1], 'khaki': [240, 230, 140, 1],
+    'lavender': [230, 230, 250, 1], 'lavenderblush': [255, 240, 245, 1],
+    'lawngreen': [124, 252, 0, 1], 'lemonchiffon': [255, 250, 205, 1],
+    'lightblue': [173, 216, 230, 1], 'lightcoral': [240, 128, 128, 1],
+    'lightcyan': [224, 255, 255, 1], 'lightgoldenrodyellow': [250, 250, 210, 1],
+    'lightgray': [211, 211, 211, 1], 'lightgreen': [144, 238, 144, 1],
+    'lightgrey': [211, 211, 211, 1], 'lightpink': [255, 182, 193, 1],
+    'lightsalmon': [255, 160, 122, 1], 'lightseagreen': [32, 178, 170, 1],
+    'lightskyblue': [135, 206, 250, 1], 'lightslategray': [119, 136, 153, 1],
+    'lightslategrey': [119, 136, 153, 1], 'lightsteelblue': [176, 196, 222, 1],
+    'lightyellow': [255, 255, 224, 1], 'lime': [0, 255, 0, 1],
+    'limegreen': [50, 205, 50, 1], 'linen': [250, 240, 230, 1],
+    'magenta': [255, 0, 255, 1], 'maroon': [128, 0, 0, 1],
+    'mediumaquamarine': [102, 205, 170, 1], 'mediumblue': [0, 0, 205, 1],
+    'mediumorchid': [186, 85, 211, 1], 'mediumpurple': [147, 112, 219, 1],
+    'mediumseagreen': [60, 179, 113, 1], 'mediumslateblue': [123, 104, 238, 1],
+    'mediumspringgreen': [0, 250, 154, 1], 'mediumturquoise': [72, 209, 204, 1],
+    'mediumvioletred': [199, 21, 133, 1], 'midnightblue': [25, 25, 112, 1],
+    'mintcream': [245, 255, 250, 1], 'mistyrose': [255, 228, 225, 1],
+    'moccasin': [255, 228, 181, 1], 'navajowhite': [255, 222, 173, 1],
+    'navy': [0, 0, 128, 1], 'oldlace': [253, 245, 230, 1],
+    'olive': [128, 128, 0, 1], 'olivedrab': [107, 142, 35, 1],
+    'orange': [255, 165, 0, 1], 'orangered': [255, 69, 0, 1],
+    'orchid': [218, 112, 214, 1], 'palegoldenrod': [238, 232, 170, 1],
+    'palegreen': [152, 251, 152, 1], 'paleturquoise': [175, 238, 238, 1],
+    'palevioletred': [219, 112, 147, 1], 'papayawhip': [255, 239, 213, 1],
+    'peachpuff': [255, 218, 185, 1], 'peru': [205, 133, 63, 1],
+    'pink': [255, 192, 203, 1], 'plum': [221, 160, 221, 1],
+    'powderblue': [176, 224, 230, 1], 'purple': [128, 0, 128, 1],
+    'red': [255, 0, 0, 1], 'rosybrown': [188, 143, 143, 1],
+    'royalblue': [65, 105, 225, 1], 'saddlebrown': [139, 69, 19, 1],
+    'salmon': [250, 128, 114, 1], 'sandybrown': [244, 164, 96, 1],
+    'seagreen': [46, 139, 87, 1], 'seashell': [255, 245, 238, 1],
+    'sienna': [160, 82, 45, 1], 'silver': [192, 192, 192, 1],
+    'skyblue': [135, 206, 235, 1], 'slateblue': [106, 90, 205, 1],
+    'slategray': [112, 128, 144, 1], 'slategrey': [112, 128, 144, 1],
+    'snow': [255, 250, 250, 1], 'springgreen': [0, 255, 127, 1],
+    'steelblue': [70, 130, 180, 1], 'tan': [210, 180, 140, 1],
+    'teal': [0, 128, 128, 1], 'thistle': [216, 191, 216, 1],
+    'tomato': [255, 99, 71, 1], 'turquoise': [64, 224, 208, 1],
+    'violet': [238, 130, 238, 1], 'wheat': [245, 222, 179, 1],
+    'white': [255, 255, 255, 1], 'whitesmoke': [245, 245, 245, 1],
+    'yellow': [255, 255, 0, 1], 'yellowgreen': [154, 205, 50, 1]
 };
 
 function clampCssByte(i) {  // Clamp to integer 0 .. 255.
@@ -3413,7 +3712,7 @@ function cssHueToRgb(m1, m2, h) {
         return m2;
     }
     if (h * 3 < 2) {
-        return m1 + (m2 - m1) * (2/3 - h) * 6;
+        return m1 + (m2 - m1) * (2 / 3 - h) * 6;
     }
     return m1;
 }
@@ -3506,7 +3805,8 @@ function parse(colorStr, rgbaArr) {
 
         return;
     }
-    var op = str.indexOf('('), ep = str.indexOf(')');
+    var op = str.indexOf('(');
+    var ep = str.indexOf(')');
     if (op !== -1 && ep + 1 === str.length) {
         var fname = str.substr(0, op);
         var params = str.substr(op + 1, ep - (op + 1)).split(',');
@@ -3883,7 +4183,7 @@ function interpolateString(p0, p1, percent) {
  */
 function interpolateArray(p0, p1, percent, out, arrDim) {
     var len = p0.length;
-    if (arrDim == 1) {
+    if (arrDim === 1) {
         for (var i = 0; i < len; i++) {
             out[i] = interpolateNumber(p0[i], p1[i], percent);
         }
@@ -3989,7 +4289,7 @@ function catmullRomInterpolateArray(
     p0, p1, p2, p3, t, t2, t3, out, arrDim
 ) {
     var len = p0.length;
-    if (arrDim == 1) {
+    if (arrDim === 1) {
         for (var i = 0; i < len; i++) {
             out[i] = catmullRomInterpolate(
                 p0[i], p1[i], p2[i], p3[i], t, t2, t3
@@ -4078,7 +4378,7 @@ function createTrackClip(animator, easing, oneTrackDone, keyframes, propName, fo
 
     var trackMaxTime;
     // Sort keyframe as ascending
-    keyframes.sort(function(a, b) {
+    keyframes.sort(function (a, b) {
         return a.time - b.time;
     });
 
@@ -4102,7 +4402,7 @@ function createTrackClip(animator, easing, oneTrackDone, keyframes, propName, fo
         prevValue = value;
 
         // Try converting a string to a color array
-        if (typeof value == 'string') {
+        if (typeof value === 'string') {
             var colorArray = parse(value);
             if (colorArray) {
                 value = colorArray;
@@ -4280,7 +4580,7 @@ function createTrackClip(animator, easing, oneTrackDone, keyframes, propName, fo
  * @param {Function} getter
  * @param {Function} setter
  */
-var Animator = function(target, loop, getter, setter) {
+var Animator = function (target, loop, getter, setter) {
     this._tracks = {};
     this._target = target;
 
@@ -4307,7 +4607,7 @@ Animator.prototype = {
      * @param  {Object} props 关键帧的属性值，key-value表示
      * @return {module:zrender/animation/Animator}
      */
-    when: function(time /* ms */, props) {
+    when: function (time /* ms */, props) {
         var tracks = this._tracks;
         for (var propName in props) {
             if (!props.hasOwnProperty(propName)) {
@@ -4392,7 +4692,7 @@ Animator.prototype = {
         var self = this;
         var clipCount = 0;
 
-        var oneTrackDone = function() {
+        var oneTrackDone = function () {
             clipCount--;
             if (!clipCount) {
                 self._doneCallback();
@@ -4472,7 +4772,7 @@ Animator.prototype = {
      * @param  {Function} cb
      * @return {module:zrender/animation/Animator}
      */
-    done: function(cb) {
+    done: function (cb) {
         if (cb) {
             this._doneList.push(cb);
         }
@@ -4656,135 +4956,159 @@ Animatable.prototype = {
      *      position: [10, 10]
      *  }, 100, 100, 'cubicOut', function () { // done })
      */
-        // TODO Return animation key
+    // TODO Return animation key
     animateTo: function (target, time, delay, easing, callback, forceAnimate) {
-        // animateTo(target, time, easing, callback);
-        if (isString(delay)) {
-            callback = easing;
-            easing = delay;
-            delay = 0;
-        }
-        // animateTo(target, time, delay, callback);
-        else if (isFunction(easing)) {
-            callback = easing;
-            easing = 'linear';
-            delay = 0;
-        }
-        // animateTo(target, time, callback);
-        else if (isFunction(delay)) {
-            callback = delay;
-            delay = 0;
-        }
-        // animateTo(target, callback)
-        else if (isFunction(time)) {
-            callback = time;
-            time = 500;
-        }
-        // animateTo(target)
-        else if (!time) {
-            time = 500;
-        }
-        // Stop all previous animations
-        this.stopAnimation();
-        this._animateToShallow('', this, target, time, delay);
-
-        // Animators may be removed immediately after start
-        // if there is nothing to animate
-        var animators = this.animators.slice();
-        var count = animators.length;
-        function done() {
-            count--;
-            if (!count) {
-                callback && callback();
-            }
-        }
-
-        // No animators. This should be checked before animators[i].start(),
-        // because 'done' may be executed immediately if no need to animate.
-        if (!count) {
-            callback && callback();
-        }
-        // Start after all animators created
-        // Incase any animator is done immediately when all animation properties are not changed
-        for (var i = 0; i < animators.length; i++) {
-            animators[i]
-                .done(done)
-                .start(easing, forceAnimate);
-        }
+        animateTo(this, target, time, delay, easing, callback, forceAnimate);
     },
 
     /**
-     * @private
-     * @param {string} path=''
-     * @param {Object} source=this
-     * @param {Object} target
-     * @param {number} [time=500]
-     * @param {number} [delay=0]
-     *
-     * @example
-     *  // Animate position
-     *  el._animateToShallow({
-     *      position: [10, 10]
-     *  })
-     *
-     *  // Animate shape, style and position in 100ms, delayed 100ms
-     *  el._animateToShallow({
-     *      shape: {
-     *          width: 500
-     *      },
-     *      style: {
-     *          fill: 'red'
-     *      }
-     *      position: [10, 10]
-     *  }, 100, 100)
+     * Animate from the target state to current state.
+     * The params and the return value are the same as `this.animateTo`.
      */
-    _animateToShallow: function (path, source, target, time, delay) {
-        var objShallow = {};
-        var propertyCount = 0;
-        for (var name in target) {
-            if (!target.hasOwnProperty(name)) {
-                continue;
-            }
+    animateFrom: function (target, time, delay, easing, callback, forceAnimate) {
+        animateTo(this, target, time, delay, easing, callback, forceAnimate, true);
+    }
+};
 
-            if (source[name] != null) {
-                if (isObject(target[name]) && !isArrayLike(target[name])) {
-                    this._animateToShallow(
-                        path ? path + '.' + name : name,
-                        source[name],
-                        target[name],
-                        time,
-                        delay
-                    );
+function animateTo(animatable, target, time, delay, easing, callback, forceAnimate, reverse) {
+    // animateTo(target, time, easing, callback);
+    if (isString(delay)) {
+        callback = easing;
+        easing = delay;
+        delay = 0;
+    }
+    // animateTo(target, time, delay, callback);
+    else if (isFunction(easing)) {
+        callback = easing;
+        easing = 'linear';
+        delay = 0;
+    }
+    // animateTo(target, time, callback);
+    else if (isFunction(delay)) {
+        callback = delay;
+        delay = 0;
+    }
+    // animateTo(target, callback)
+    else if (isFunction(time)) {
+        callback = time;
+        time = 500;
+    }
+    // animateTo(target)
+    else if (!time) {
+        time = 500;
+    }
+    // Stop all previous animations
+    animatable.stopAnimation();
+    animateToShallow(animatable, '', animatable, target, time, delay, reverse);
+
+    // Animators may be removed immediately after start
+    // if there is nothing to animate
+    var animators = animatable.animators.slice();
+    var count = animators.length;
+    function done() {
+        count--;
+        if (!count) {
+            callback && callback();
+        }
+    }
+
+    // No animators. This should be checked before animators[i].start(),
+    // because 'done' may be executed immediately if no need to animate.
+    if (!count) {
+        callback && callback();
+    }
+    // Start after all animators created
+    // Incase any animator is done immediately when all animation properties are not changed
+    for (var i = 0; i < animators.length; i++) {
+        animators[i]
+            .done(done)
+            .start(easing, forceAnimate);
+    }
+}
+
+/**
+ * @param {string} path=''
+ * @param {Object} source=animatable
+ * @param {Object} target
+ * @param {number} [time=500]
+ * @param {number} [delay=0]
+ * @param {boolean} [reverse] If `true`, animate
+ *        from the `target` to current state.
+ *
+ * @example
+ *  // Animate position
+ *  el._animateToShallow({
+ *      position: [10, 10]
+ *  })
+ *
+ *  // Animate shape, style and position in 100ms, delayed 100ms
+ *  el._animateToShallow({
+ *      shape: {
+ *          width: 500
+ *      },
+ *      style: {
+ *          fill: 'red'
+ *      }
+ *      position: [10, 10]
+ *  }, 100, 100)
+ */
+function animateToShallow(animatable, path, source, target, time, delay, reverse) {
+    var objShallow = {};
+    var propertyCount = 0;
+    for (var name in target) {
+        if (!target.hasOwnProperty(name)) {
+            continue;
+        }
+
+        if (source[name] != null) {
+            if (isObject(target[name]) && !isArrayLike(target[name])) {
+                animateToShallow(
+                    animatable,
+                    path ? path + '.' + name : name,
+                    source[name],
+                    target[name],
+                    time,
+                    delay,
+                    reverse
+                );
+            }
+            else {
+                if (reverse) {
+                    objShallow[name] = source[name];
+                    setAttrByPath(animatable, path, name, target[name]);
                 }
                 else {
                     objShallow[name] = target[name];
-                    propertyCount++;
                 }
-            }
-            else if (target[name] != null) {
-                // Attr directly if not has property
-                // FIXME, if some property not needed for element ?
-                if (!path) {
-                    this.attr(name, target[name]);
-                }
-                else {  // Shape or style
-                    var props = {};
-                    props[path] = {};
-                    props[path][name] = target[name];
-                    this.attr(props);
-                }
+                propertyCount++;
             }
         }
-
-        if (propertyCount > 0) {
-            this.animate(path, false)
-                .when(time == null ? 500 : time, objShallow)
-                .delay(delay || 0);
+        else if (target[name] != null && !reverse) {
+            setAttrByPath(animatable, path, name, target[name]);
         }
-
-        return this;
     }
-};
+
+    if (propertyCount > 0) {
+        animatable.animate(path, false)
+            .when(time == null ? 500 : time, objShallow)
+            .delay(delay || 0);
+    }
+}
+
+function setAttrByPath(el, path, name, value) {
+    // Attr directly if not has property
+    // FIXME, if some property not needed for element ?
+    if (!path) {
+        el.attr(name, value);
+    }
+    else {
+        // Only support set shape or style
+        var props = {};
+        props[path] = {};
+        props[path][name] = value;
+        el.attr(props);
+    }
+}
 
 var Element = function (opts) { // jshint ignore:line
 
@@ -5177,7 +5501,7 @@ BoundingRect.prototype = {
         var by0 = b.y;
         var by1 = b.y + b.height;
 
-        return ! (ax1 < bx0 || bx1 < ax0 || ay1 < by0 || by1 < ay0);
+        return !(ax1 < bx0 || bx1 < ax0 || ay1 < by0 || by1 < ay0);
     },
 
     contain: function (x, y) {
@@ -5970,7 +6294,7 @@ function TimSort(array, compare) {
         }
     }
 
-    function mergeHigh (start1, length1, start2, length2) {
+    function mergeHigh(start1, length1, start2, length2) {
         var i = 0;
 
         for (i = 0; i < length2; i++) {
@@ -6439,6 +6763,15 @@ var fixShadow = function (ctx, propName, value) {
     return value;
 };
 
+var ContextCachedBy = {
+    NONE: 0,
+    STYLE_BIND: 1,
+    PLAIN_TEXT: 2
+};
+
+// Avoid confused with 0/false.
+var WILL_BE_RESTORED = 9;
+
 var STYLE_COMMON_PROPS = [
     ['shadowBlur', 0], ['shadowOffsetX', 0], ['shadowOffsetY', 0], ['shadowColor', '#000'],
     ['lineCap', 'butt'], ['lineJoin', 'miter'], ['miterLimit', 10]
@@ -6525,7 +6858,12 @@ Style.prototype = {
     strokeOpacity: null,
 
     /**
-     * @type {Array.<number>}
+     * `true` is not supported.
+     * `false`/`null`/`undefined` are the same.
+     * `false` is used to remove lineDash in some 
+     * case that `null`/`undefined` can not be set. 
+     * (e.g., emphasis.lineStyle in echarts)
+     * @type {Array.<number>|boolean}
      */
     lineDash: null,
 
@@ -6798,30 +7136,34 @@ Style.prototype = {
     bind: function (ctx, el, prevEl) {
         var style = this;
         var prevStyle = prevEl && prevEl.style;
-        var firstDraw = !prevStyle;
+        // If no prevStyle, it means first draw.
+        // Only apply cache if the last time cachced by this function.
+        var notCheckCache = !prevStyle || ctx.__attrCachedBy !== ContextCachedBy.STYLE_BIND;
+
+        ctx.__attrCachedBy = ContextCachedBy.STYLE_BIND;
 
         for (var i = 0; i < STYLE_COMMON_PROPS.length; i++) {
             var prop = STYLE_COMMON_PROPS[i];
             var styleName = prop[0];
 
-            if (firstDraw || style[styleName] !== prevStyle[styleName]) {
+            if (notCheckCache || style[styleName] !== prevStyle[styleName]) {
                 // FIXME Invalid property value will cause style leak from previous element.
                 ctx[styleName] =
                     fixShadow(ctx, styleName, style[styleName] || prop[1]);
             }
         }
 
-        if ((firstDraw || style.fill !== prevStyle.fill)) {
+        if ((notCheckCache || style.fill !== prevStyle.fill)) {
             ctx.fillStyle = style.fill;
         }
-        if ((firstDraw || style.stroke !== prevStyle.stroke)) {
+        if ((notCheckCache || style.stroke !== prevStyle.stroke)) {
             ctx.strokeStyle = style.stroke;
         }
-        if ((firstDraw || style.opacity !== prevStyle.opacity)) {
+        if ((notCheckCache || style.opacity !== prevStyle.opacity)) {
             ctx.globalAlpha = style.opacity == null ? 1 : style.opacity;
         }
 
-        if ((firstDraw || style.blend !== prevStyle.blend)) {
+        if ((notCheckCache || style.blend !== prevStyle.blend)) {
             ctx.globalCompositeOperation = style.blend || 'source-over';
         }
         if (this.hasStroke()) {
@@ -6978,7 +7320,7 @@ function createDom(id, painter, dpr) {
  * @param {module:zrender/Painter} painter
  * @param {number} [dpr]
  */
-var Layer = function(id, painter, dpr) {
+var Layer = function (id, painter, dpr) {
     var dom;
     dpr = dpr || devicePixelRatio;
     if (typeof id === 'string') {
@@ -7067,7 +7409,7 @@ Layer.prototype = {
         this.domBack = createDom('back-' + this.id, this.painter, dpr);
         this.ctxBack = this.domBack.getContext('2d');
 
-        if (dpr != 1) {
+        if (dpr !== 1) {
             this.ctxBack.scale(dpr, dpr);
         }
     },
@@ -7095,7 +7437,7 @@ Layer.prototype = {
             domBack.width = width * dpr;
             domBack.height = height * dpr;
 
-            if (dpr != 1) {
+            if (dpr !== 1) {
                 this.ctxBack.scale(dpr, dpr);
             }
         }
@@ -7228,7 +7570,7 @@ function createOrUpdateImage(newImageOrSrc, image, hostEl, cb, cbPayload) {
             !isImageReady(image) && cachedImgObj.pending.push(pendingWrap);
         }
         else {
-            !image && (image = new Image());
+            image = new Image();
             image.onload = image.onerror = imageOnLoad;
 
             globalImageCache.put(
@@ -7273,7 +7615,7 @@ var textWidthCacheCounter = 0;
 var TEXT_CACHE_MAX = 5000;
 var STYLE_REG = /\{([a-zA-Z0-9_]+)\|([^}]*)\}/g;
 
-var DEFAULT_FONT = '12px sans-serif';
+var DEFAULT_FONT$1 = '12px sans-serif';
 
 // Avoid assign to an exported variable, for transforming to cjs.
 var methods$1 = {};
@@ -7289,7 +7631,7 @@ function $override$1(name, fn) {
  * @return {number} width
  */
 function getWidth(text, font) {
-    font = font || DEFAULT_FONT;
+    font = font || DEFAULT_FONT$1;
     var key = text + ':' + font;
     if (textWidthCache[key]) {
         return textWidthCache[key];
@@ -7324,14 +7666,14 @@ function getWidth(text, font) {
  * @param {Object} [truncate]
  * @return {Object} {x, y, width, height, lineHeight}
  */
-function getBoundingRect(text, font, textAlign, textVerticalAlign, textPadding, rich, truncate) {
+function getBoundingRect(text, font, textAlign, textVerticalAlign, textPadding, textLineHeight, rich, truncate) {
     return rich
-        ? getRichTextRect(text, font, textAlign, textVerticalAlign, textPadding, rich, truncate)
-        : getPlainTextRect(text, font, textAlign, textVerticalAlign, textPadding, truncate);
+        ? getRichTextRect(text, font, textAlign, textVerticalAlign, textPadding, textLineHeight, rich, truncate)
+        : getPlainTextRect(text, font, textAlign, textVerticalAlign, textPadding, textLineHeight, truncate);
 }
 
-function getPlainTextRect(text, font, textAlign, textVerticalAlign, textPadding, truncate) {
-    var contentBlock = parsePlainText(text, font, textPadding, truncate);
+function getPlainTextRect(text, font, textAlign, textVerticalAlign, textPadding, textLineHeight, truncate) {
+    var contentBlock = parsePlainText(text, font, textPadding, textLineHeight, truncate);
     var outerWidth = getWidth(text, font);
     if (textPadding) {
         outerWidth += textPadding[1] + textPadding[3];
@@ -7347,13 +7689,14 @@ function getPlainTextRect(text, font, textAlign, textVerticalAlign, textPadding,
     return rect;
 }
 
-function getRichTextRect(text, font, textAlign, textVerticalAlign, textPadding, rich, truncate) {
+function getRichTextRect(text, font, textAlign, textVerticalAlign, textPadding, textLineHeight, rich, truncate) {
     var contentBlock = parseRichText(text, {
         rich: rich,
         truncate: truncate,
         font: font,
         textAlign: textAlign,
-        textPadding: textPadding
+        textPadding: textPadding,
+        textLineHeight: textLineHeight
     });
     var outerWidth = contentBlock.outerWidth;
     var outerHeight = contentBlock.outerHeight;
@@ -7400,13 +7743,16 @@ function adjustTextY(y, height, textVerticalAlign) {
 }
 
 /**
+ * Follow same interface to `Displayable.prototype.calculateTextPosition`.
  * @public
- * @param {stirng} textPosition
- * @param {Object} rect {x, y, width, height}
- * @param {number} distance
- * @return {Object} {x, y, textAlign, textVerticalAlign}
+ * @param {Obejct} [out] Prepared out object. If not input, auto created in the method.
+ * @param {module:zrender/graphic/Style} style where `textPosition` and `textDistance` are visited.
+ * @param {Object} rect {x, y, width, height} Rect of the host elment, according to which the text positioned.
+ * @return {Object} The input `out`. Set: {x, y, textAlign, textVerticalAlign}
  */
-function adjustTextPositionOnRect(textPosition, rect, distance) {
+function calculateTextPosition(out, style, rect) {
+    var textPosition = style.textPosition;
+    var distance = style.textDistance;
 
     var x = rect.x;
     var y = rect.y;
@@ -7491,13 +7837,25 @@ function adjustTextPositionOnRect(textPosition, rect, distance) {
             break;
     }
 
-    return {
-        x: x,
-        y: y,
-        textAlign: textAlign,
-        textVerticalAlign: textVerticalAlign
-    };
+    out = out || {};
+    out.x = x;
+    out.y = y;
+    out.textAlign = textAlign;
+    out.textVerticalAlign = textVerticalAlign;
+
+    return out;
 }
+
+/**
+ * To be removed. But still do not remove in case that some one has imported it.
+ * @deprecated
+ * @public
+ * @param {stirng} textPosition
+ * @param {Object} rect {x, y, width, height}
+ * @param {number} distance
+ * @return {Object} {x, y, textAlign, textVerticalAlign}
+ */
+
 
 /**
  * Show ellipsis if overflow.
@@ -7554,7 +7912,7 @@ function prepareTruncateOptions(containerWidth, font, ellipsis, options) {
         contentWidth -= ascCharWidth;
     }
 
-    var ellipsisWidth = getWidth(ellipsis);
+    var ellipsisWidth = getWidth(ellipsis, font);
     if (ellipsisWidth > contentWidth) {
         ellipsis = '';
         ellipsisWidth = 0;
@@ -7585,7 +7943,7 @@ function truncateSingleLine(textLine, options) {
         return textLine;
     }
 
-    for (var j = 0;; j++) {
+    for (var j = 0; ; j++) {
         if (lineWidth <= contentWidth || j >= options.maxIterations) {
             textLine += options.ellipsis;
             break;
@@ -7641,7 +7999,7 @@ function measureText(text, font) {
 // Avoid assign to an exported variable, for transforming to cjs.
 methods$1.measureText = function (text, font) {
     var ctx = getContext();
-    ctx.font = font || DEFAULT_FONT;
+    ctx.font = font || DEFAULT_FONT$1;
     return ctx.measureText(text);
 };
 
@@ -7653,10 +8011,10 @@ methods$1.measureText = function (text, font) {
  * @return {Object} block: {lineHeight, lines, height, outerHeight}
  *  Notice: for performance, do not calculate outerWidth util needed.
  */
-function parsePlainText(text, font, padding, truncate) {
+function parsePlainText(text, font, padding, textLineHeight, truncate) {
     text != null && (text += '');
 
-    var lineHeight = getLineHeight(font);
+    var lineHeight = retrieve2(textLineHeight, getLineHeight(font));
     var lines = text ? text.split('\n') : [];
     var height = lines.length * lineHeight;
     var outerHeight = height;
@@ -7940,6 +8298,15 @@ function makeFont(style) {
     return font && trim(font) || style.textFont || style.font;
 }
 
+/**
+ * @param {Object} ctx
+ * @param {Object} shape
+ * @param {number} shape.x
+ * @param {number} shape.y
+ * @param {number} shape.width
+ * @param {number} shape.height
+ * @param {number} shape.r
+ */
 function buildPath(ctx, shape) {
     var x = shape.x;
     var y = shape.y;
@@ -8020,6 +8387,9 @@ function buildPath(ctx, shape) {
     r1 !== 0 && ctx.arc(x + r1, y + r1, r1, Math.PI, Math.PI * 1.5);
 }
 
+var DEFAULT_FONT = DEFAULT_FONT$1;
+
+// TODO: Have not support 'start', 'end' yet.
 var VALID_TEXT_ALIGN = {left: 1, right: 1, center: 1};
 var VALID_TEXT_VERTICAL_ALIGN = {top: 1, bottom: 1, middle: 1};
 // Different from `STYLE_COMMON_PROPS` of `graphic/Style`,
@@ -8030,6 +8400,8 @@ var SHADOW_STYLE_COMMON_PROPS = [
     ['textShadowOffsetY', 'shadowOffsetY', 0],
     ['textShadowColor', 'shadowColor', 'transparent']
 ];
+var _tmpTextPositionResult = {};
+var _tmpBoxPositionResult = {};
 
 /**
  * @param {module:zrender/graphic/Style} style
@@ -8072,11 +8444,11 @@ function normalizeStyle(style) {
  * @param {module:zrender/graphic/Style} style
  * @param {Object|boolean} [rect] {x, y, width, height}
  *                  If set false, rect text is not used.
- * @param {Element} [prevEl] For ctx prop cache.
+ * @param {Element|module:zrender/graphic/helper/constant.WILL_BE_RESTORED} [prevEl] For ctx prop cache.
  */
 function renderText(hostEl, ctx, text, style, rect, prevEl) {
     style.rich
-        ? renderRichText(hostEl, ctx, text, style, rect)
+        ? renderRichText(hostEl, ctx, text, style, rect, prevEl)
         : renderPlainText(hostEl, ctx, text, style, rect, prevEl);
 }
 
@@ -8085,14 +8457,45 @@ function renderText(hostEl, ctx, text, style, rect, prevEl) {
 function renderPlainText(hostEl, ctx, text, style, rect, prevEl) {
     'use strict';
 
-    var prevStyle = prevEl && prevEl.style;
-    // Some cache only available on textEl.
-    var isPrevTextEl = prevStyle && prevEl.type === 'text';
+    var needDrawBg = needDrawBackground(style);
+
+    var prevStyle;
+    var checkCache = false;
+    var cachedByMe = ctx.__attrCachedBy === ContextCachedBy.PLAIN_TEXT;
+
+    // Only take and check cache for `Text` el, but not RectText.
+    if (prevEl !== WILL_BE_RESTORED) {
+        if (prevEl) {
+            prevStyle = prevEl.style;
+            checkCache = !needDrawBg && cachedByMe && prevStyle;
+        }
+
+        // Prevent from using cache in `Style::bind`, because of the case:
+        // ctx property is modified by other properties than `Style::bind`
+        // used, and Style::bind is called next.
+        ctx.__attrCachedBy = needDrawBg ? ContextCachedBy.NONE : ContextCachedBy.PLAIN_TEXT;
+    }
+    // Since this will be restored, prevent from using these props to check cache in the next
+    // entering of this method. But do not need to clear other cache like `Style::bind`.
+    else if (cachedByMe) {
+        ctx.__attrCachedBy = ContextCachedBy.NONE;
+    }
 
     var styleFont = style.font || DEFAULT_FONT;
-    if (!isPrevTextEl || styleFont !== (prevStyle.font || DEFAULT_FONT)) {
+    // PENDING
+    // Only `Text` el set `font` and keep it (`RectText` will restore). So theoretically
+    // we can make font cache on ctx, which can cache for text el that are discontinuous.
+    // But layer save/restore needed to be considered.
+    // if (styleFont !== ctx.__fontCache) {
+    //     ctx.font = styleFont;
+    //     if (prevEl !== WILL_BE_RESTORED) {
+    //         ctx.__fontCache = styleFont;
+    //     }
+    // }
+    if (!checkCache || styleFont !== (prevStyle.font || DEFAULT_FONT)) {
         ctx.font = styleFont;
     }
+
     // Use the final font from context-2d, because the final
     // font might not be the style.font when it is illegal.
     // But get `ctx.font` might be time consuming.
@@ -8103,11 +8506,12 @@ function renderPlainText(hostEl, ctx, text, style, rect, prevEl) {
     }
 
     var textPadding = style.textPadding;
+    var textLineHeight = style.textLineHeight;
 
     var contentBlock = hostEl.__textCotentBlock;
     if (!contentBlock || hostEl.__dirtyText) {
         contentBlock = hostEl.__textCotentBlock = parsePlainText(
-            text, computedFont, textPadding, style.truncate
+            text, computedFont, textPadding, textLineHeight, style.truncate
         );
     }
 
@@ -8116,7 +8520,7 @@ function renderPlainText(hostEl, ctx, text, style, rect, prevEl) {
     var textLines = contentBlock.lines;
     var lineHeight = contentBlock.lineHeight;
 
-    var boxPos = getBoxPosition(outerHeight, style, rect);
+    var boxPos = getBoxPosition(_tmpBoxPositionResult, hostEl, style, rect);
     var baseX = boxPos.baseX;
     var baseY = boxPos.baseY;
     var textAlign = boxPos.textAlign || 'left';
@@ -8129,7 +8533,6 @@ function renderPlainText(hostEl, ctx, text, style, rect, prevEl) {
     var textX = baseX;
     var textY = boxY;
 
-    var needDrawBg = needDrawBackground(style);
     if (needDrawBg || textPadding) {
         // Consider performance, do not call getTextWidth util necessary.
         var textWidth = getWidth(text, computedFont);
@@ -8152,6 +8555,8 @@ function renderPlainText(hostEl, ctx, text, style, rect, prevEl) {
     // Force baseline to be "middle". Otherwise, if using "top", the
     // text will offset downward a little bit in font "Microsoft YaHei".
     ctx.textBaseline = 'middle';
+    // Set text opacity
+    ctx.globalAlpha = style.opacity || 1;
 
     // Always set shadowBlur and shadowOffset to avoid leak from displayable.
     for (var i = 0; i < SHADOW_STYLE_COMMON_PROPS.length; i++) {
@@ -8159,7 +8564,7 @@ function renderPlainText(hostEl, ctx, text, style, rect, prevEl) {
         var styleProp = propItem[0];
         var ctxProp = propItem[1];
         var val = style[styleProp];
-        if (!isPrevTextEl || val !== prevStyle[styleProp]) {
+        if (!checkCache || val !== prevStyle[styleProp]) {
             ctx[ctxProp] = fixShadow(ctx, ctxProp, val || propItem[2]);
         }
     }
@@ -8168,9 +8573,9 @@ function renderPlainText(hostEl, ctx, text, style, rect, prevEl) {
     textY += lineHeight / 2;
 
     var textStrokeWidth = style.textStrokeWidth;
-    var textStrokeWidthPrev = isPrevTextEl ? prevStyle.textStrokeWidth : null;
-    var strokeWidthChanged = !isPrevTextEl || textStrokeWidth !== textStrokeWidthPrev;
-    var strokeChanged = !isPrevTextEl || strokeWidthChanged || style.textStroke !== prevStyle.textStroke;
+    var textStrokeWidthPrev = checkCache ? prevStyle.textStrokeWidth : null;
+    var strokeWidthChanged = !checkCache || textStrokeWidth !== textStrokeWidthPrev;
+    var strokeChanged = !checkCache || strokeWidthChanged || style.textStroke !== prevStyle.textStroke;
     var textStroke = getStroke(style.textStroke, textStrokeWidth);
     var textFill = getFill(style.textFill);
 
@@ -8183,7 +8588,7 @@ function renderPlainText(hostEl, ctx, text, style, rect, prevEl) {
         }
     }
     if (textFill) {
-        if (!isPrevTextEl || style.textFill !== prevStyle.textFill) {
+        if (!checkCache || style.textFill !== prevStyle.textFill) {
             ctx.fillStyle = textFill;
         }
     }
@@ -8204,7 +8609,13 @@ function renderPlainText(hostEl, ctx, text, style, rect, prevEl) {
     }
 }
 
-function renderRichText(hostEl, ctx, text, style, rect) {
+function renderRichText(hostEl, ctx, text, style, rect, prevEl) {
+    // Do not do cache for rich text because of the complexity.
+    // But `RectText` this will be restored, do not need to clear other cache like `Style::bind`.
+    if (prevEl !== WILL_BE_RESTORED) {
+        ctx.__attrCachedBy = ContextCachedBy.NONE;
+    }
+
     var contentBlock = hostEl.__textCotentBlock;
 
     if (!contentBlock || hostEl.__dirtyText) {
@@ -8220,7 +8631,7 @@ function drawRichText(hostEl, ctx, contentBlock, style, rect) {
     var outerHeight = contentBlock.outerHeight;
     var textPadding = style.textPadding;
 
-    var boxPos = getBoxPosition(outerHeight, style, rect);
+    var boxPos = getBoxPosition(_tmpBoxPositionResult, hostEl, style, rect);
     var baseX = boxPos.baseX;
     var baseY = boxPos.baseY;
     var textAlign = boxPos.textAlign;
@@ -8312,6 +8723,7 @@ function applyTextRotation(ctx, style, rect, x, y) {
 
 function placeToken(hostEl, ctx, token, style, lineHeight, lineTop, x, textAlign) {
     var tokenStyle = style.rich[token.styleName] || {};
+    tokenStyle.text = token.text;
 
     // 'ctx.textBaseline' is always set as 'middle', for sake of
     // the bias of "Microsoft YaHei".
@@ -8373,11 +8785,13 @@ function placeToken(hostEl, ctx, token, style, lineHeight, lineTop, x, textAlign
 }
 
 function needDrawBackground(style) {
-    return style.textBackgroundColor
-        || (style.textBorderWidth && style.textBorderColor);
+    return !!(
+        style.textBackgroundColor
+        || (style.textBorderWidth && style.textBorderColor)
+    );
 }
 
-// style: {textBackgroundColor, textBorderWidth, textBorderColor, textBorderRadius}
+// style: {textBackgroundColor, textBorderWidth, textBorderColor, textBorderRadius, text}
 // shape: {x, y, width, height}
 function drawBackground(hostEl, ctx, style, x, y, width, height) {
     var textBackgroundColor = style.textBackgroundColor;
@@ -8450,7 +8864,7 @@ function onBgImageLoaded(image, textBackgroundColor) {
     textBackgroundColor.image = image;
 }
 
-function getBoxPosition(blockHeiht, style, rect) {
+function getBoxPosition(out, hostEl, style, rect) {
     var baseX = style.x || 0;
     var baseY = style.y || 0;
     var textAlign = style.textAlign;
@@ -8465,9 +8879,9 @@ function getBoxPosition(blockHeiht, style, rect) {
             baseY = rect.y + parsePercent(textPosition[1], rect.height);
         }
         else {
-            var res = adjustTextPositionOnRect(
-                textPosition, rect, style.textDistance
-            );
+            var res = (hostEl && hostEl.calculateTextPosition)
+                ? hostEl.calculateTextPosition(_tmpTextPositionResult, style, rect)
+                : calculateTextPosition(_tmpTextPositionResult, style, rect);
             baseX = res.x;
             baseY = res.y;
             // Default align and baseline when has textPosition
@@ -8484,13 +8898,15 @@ function getBoxPosition(blockHeiht, style, rect) {
         }
     }
 
-    return {
-        baseX: baseX,
-        baseY: baseY,
-        textAlign: textAlign,
-        textVerticalAlign: textVerticalAlign
-    };
+    out = out || {};
+    out.baseX = baseX;
+    out.baseY = baseY;
+    out.textAlign = textAlign;
+    out.textVerticalAlign = textVerticalAlign;
+
+    return out;
 }
+
 
 function setCtx(ctx, prop, value) {
     ctx[prop] = fixShadow(ctx, prop, value);
@@ -8607,7 +9023,7 @@ RectText.prototype = {
         }
 
         // transformText and textRotation can not be used at the same time.
-        renderText(this, ctx, text, style, rect);
+        renderText(this, ctx, text, style, rect, WILL_BE_RESTORED);
 
         ctx.restore();
     }
@@ -8629,8 +9045,8 @@ function Displayable(opts) {
     // Extend properties
     for (var name in opts) {
         if (
-            opts.hasOwnProperty(name) &&
-            name !== 'style'
+            opts.hasOwnProperty(name)
+                && name !== 'style'
         ) {
             this[name] = opts[name];
         }
@@ -8643,7 +9059,9 @@ function Displayable(opts) {
 
     this._rect = null;
     // Shapes for cascade clipping.
-    this.__clipPaths = [];
+    // Can only be `null`/`undefined` or an non-empty array, MUST NOT be an empty array.
+    // because it is easy to only using null to check whether clipPaths changed.
+    this.__clipPaths = null;
 
     // FIXME Stateful must be mixined after style is setted
     // Stateful.call(this, opts);
@@ -8868,7 +9286,28 @@ Displayable.prototype = {
         this.style = new Style(obj, this);
         this.dirty(false);
         return this;
-    }
+    },
+
+    /**
+     * The string value of `textPosition` needs to be calculated to a real postion.
+     * For example, `'inside'` is calculated to `[rect.width/2, rect.height/2]`
+     * by default. See `contain/text.js#calculateTextPosition` for more details.
+     * But some coutom shapes like "pin", "flag" have center that is not exactly
+     * `[width/2, height/2]`. So we provide this hook to customize the calculation
+     * for those shapes. It will be called if the `style.textPosition` is a string.
+     * @param {Obejct} [out] Prepared out object. If not provided, this method should
+     *        be responsible for creating one.
+     * @param {module:zrender/graphic/Style} style
+     * @param {Object} rect {x, y, width, height}
+     * @return {Obejct} out The same as the input out.
+     *         {
+     *             x: number. mandatory.
+     *             y: number. mandatory.
+     *             textAlign: string. optional. use style.textAlign by default.
+     *             textVerticalAlign: string. optional. use style.textVerticalAlign by default.
+     *         }
+     */
+    calculateTextPosition: null
 };
 
 inherits(Displayable, Element);
@@ -8959,14 +9398,14 @@ ZImage.prototype = {
         // Draw rect text
         if (style.text != null) {
             // Only restore transform when needs draw text.
-            this.restoreTransform(ctx);    
+            this.restoreTransform(ctx);
             this.drawRectText(ctx, this.getBoundingRect());
         }
     },
 
     getBoundingRect: function () {
         var style = this.style;
-        if (! this._rect) {
+        if (!this._rect) {
             this._rect = new BoundingRect(
                 style.x || 0, style.y || 0, style.width || 0, style.height || 0
             );
@@ -8996,8 +9435,8 @@ function isLayerValid(layer) {
         return true;
     }
 
-    if (typeof(layer.resize) !== 'function'
-        || typeof(layer.refresh) !== 'function'
+    if (typeof (layer.resize) !== 'function'
+        || typeof (layer.refresh) !== 'function'
     ) {
         return false;
     }
@@ -9018,10 +9457,10 @@ function isDisplayableCulled(el, width, height) {
 }
 
 function isClipPathChanged(clipPaths, prevClipPaths) {
-    if (clipPaths == prevClipPaths) { // Can both be null or undefined
+    // displayable.__clipPaths can only be `null`/`undefined` or an non-empty array.
+    if (clipPaths === prevClipPaths) { 
         return false;
     }
-
     if (!clipPaths || !prevClipPaths || (clipPaths.length !== prevClipPaths.length)) {
         return true;
     }
@@ -9030,6 +9469,7 @@ function isClipPathChanged(clipPaths, prevClipPaths) {
             return true;
         }
     }
+    return false;
 }
 
 function doClip(clipPaths, ctx) {
@@ -9475,16 +9915,14 @@ Painter.prototype = {
         ) {
 
             var clipPaths = el.__clipPaths;
+            var prevElClipPaths = scope.prevElClipPaths;
 
             // Optimize when clipping on group with several elements
-            if (!scope.prevElClipPaths
-                || isClipPathChanged(clipPaths, scope.prevElClipPaths)
-            ) {
+            if (!prevElClipPaths || isClipPathChanged(clipPaths, prevElClipPaths)) {
                 // If has previous clipping state, restore from it
-                if (scope.prevElClipPaths) {
-                    currentLayer.ctx.restore();
+                if (prevElClipPaths) {
+                    ctx.restore();
                     scope.prevElClipPaths = null;
-
                     // Reset prevEl since context has been restored
                     scope.prevEl = null;
                 }
@@ -9827,7 +10265,7 @@ Painter.prototype = {
             domRoot.style.display = '';
 
             // 优化没有实际改变的resize
-            if (this._width != width || height != this._height) {
+            if (this._width !== width || height !== this._height) {
                 domRoot.style.width = width + 'px';
                 domRoot.style.height = height + 'px';
 
@@ -10035,7 +10473,7 @@ var Animation = function (options) {
 
     this.stage = options.stage || {};
 
-    this.onframe = options.onframe || function() {};
+    this.onframe = options.onframe || function () {};
 
     // private properties
     this._clips = [];
@@ -10078,7 +10516,7 @@ Animation.prototype = {
      * 删除动画片段
      * @param {module:zrender/animation/Clip} clip
      */
-    removeClip: function(clip) {
+    removeClip: function (clip) {
         var idx = indexOf(this._clips, clip);
         if (idx >= 0) {
             this._clips.splice(idx, 1);
@@ -10097,7 +10535,7 @@ Animation.prototype = {
         animator.animation = null;
     },
 
-    _update: function() {
+    _update: function () {
         var time = new Date().getTime() - this._pausedTime;
         var delta = time - this._time;
         var clips = this._clips;
@@ -10245,120 +10683,6 @@ Animation.prototype = {
 
 mixin(Animation, Eventful);
 
-/**
- * Only implements needed gestures for mobile.
- */
-
-var GestureMgr = function () {
-
-    /**
-     * @private
-     * @type {Array.<Object>}
-     */
-    this._track = [];
-};
-
-GestureMgr.prototype = {
-
-    constructor: GestureMgr,
-
-    recognize: function (event, target, root) {
-        this._doTrack(event, target, root);
-        return this._recognize(event);
-    },
-
-    clear: function () {
-        this._track.length = 0;
-        return this;
-    },
-
-    _doTrack: function (event, target, root) {
-        var touches = event.touches;
-
-        if (!touches) {
-            return;
-        }
-
-        var trackItem = {
-            points: [],
-            touches: [],
-            target: target,
-            event: event
-        };
-
-        for (var i = 0, len = touches.length; i < len; i++) {
-            var touch = touches[i];
-            var pos = clientToLocal(root, touch, {});
-            trackItem.points.push([pos.zrX, pos.zrY]);
-            trackItem.touches.push(touch);
-        }
-
-        this._track.push(trackItem);
-    },
-
-    _recognize: function (event) {
-        for (var eventName in recognizers) {
-            if (recognizers.hasOwnProperty(eventName)) {
-                var gestureInfo = recognizers[eventName](this._track, event);
-                if (gestureInfo) {
-                    return gestureInfo;
-                }
-            }
-        }
-    }
-};
-
-function dist$1(pointPair) {
-    var dx = pointPair[1][0] - pointPair[0][0];
-    var dy = pointPair[1][1] - pointPair[0][1];
-
-    return Math.sqrt(dx * dx + dy * dy);
-}
-
-function center(pointPair) {
-    return [
-        (pointPair[0][0] + pointPair[1][0]) / 2,
-        (pointPair[0][1] + pointPair[1][1]) / 2
-    ];
-}
-
-var recognizers = {
-
-    pinch: function (track, event) {
-        var trackLen = track.length;
-
-        if (!trackLen) {
-            return;
-        }
-
-        var pinchEnd = (track[trackLen - 1] || {}).points;
-        var pinchPre = (track[trackLen - 2] || {}).points || pinchEnd;
-
-        if (pinchPre
-            && pinchPre.length > 1
-            && pinchEnd
-            && pinchEnd.length > 1
-        ) {
-            var pinchScale = dist$1(pinchEnd) / dist$1(pinchPre);
-            !isFinite(pinchScale) && (pinchScale = 1);
-
-            event.pinchScale = pinchScale;
-
-            var pinchCenter = center(pinchEnd);
-            event.pinchX = pinchCenter[0];
-            event.pinchY = pinchCenter[1];
-
-            return {
-                type: 'pinch',
-                target: track[0].target,
-                event: event
-            };
-        }
-    }
-
-    // Only pinch currently.
-};
-
 var TOUCH_CLICK_DELAY = 300;
 
 var mouseHandlerNames = [
@@ -10381,28 +10705,6 @@ var pointerHandlerNames = map(mouseHandlerNames, function (name) {
 
 function eventNameFix(name) {
     return (name === 'mousewheel' && env$1.browser.firefox) ? 'DOMMouseScroll' : name;
-}
-
-function processGesture(proxy, event, stage) {
-    var gestureMgr = proxy._gestureMgr;
-
-    stage === 'start' && gestureMgr.clear();
-
-    var gestureInfo = gestureMgr.recognize(
-        event,
-        proxy.handler.findHover(event.zrX, event.zrY, null).target,
-        proxy.dom
-    );
-
-    stage === 'end' && gestureMgr.clear();
-
-    // Do not do any preventDefault here. Upper application do that if necessary.
-    if (gestureInfo) {
-        var type = gestureInfo.type;
-        event.gestureEvent = type;
-
-        proxy.handler.dispatchToElement({target: gestureInfo.target}, type, gestureInfo.event);
-    }
 }
 
 // function onMSGestureChange(proxy, event) {
@@ -10455,8 +10757,8 @@ var domHandlers = {
         event = normalizeEvent(this.dom, event);
 
         var element = event.toElement || event.relatedTarget;
-        if (element != this.dom) {
-            while (element && element.nodeType != 9) {
+        if (element !== this.dom) {
+            while (element && element.nodeType !== 9) {
                 // 忽略包含在root中的dom引起的mouseOut
                 if (element === this.dom) {
                     return;
@@ -10485,7 +10787,7 @@ var domHandlers = {
 
         this._lastTouchMoment = new Date();
 
-        processGesture(this, event, 'start');
+        this.handler.processGesture(this, event, 'start');
 
         // In touch device, trigger `mousemove`(`mouseover`) should
         // be triggered, and must before `mousedown` triggered.
@@ -10509,7 +10811,7 @@ var domHandlers = {
         // mouse event in upper applicatoin.
         event.zrByTouch = true;
 
-        processGesture(this, event, 'change');
+        this.handler.processGesture(this, event, 'change');
 
         // Mouse move should always be triggered no matter whether
         // there is gestrue event, because mouse move and pinch may
@@ -10532,7 +10834,7 @@ var domHandlers = {
         // mouse event in upper applicatoin.
         event.zrByTouch = true;
 
-        processGesture(this, event, 'end');
+        this.handler.processGesture(this, event, 'end');
 
         domHandlers.mouseup.call(this, event);
 
@@ -10652,12 +10954,6 @@ function HandlerDomProxy(dom) {
      */
     this._touchTimer;
 
-    /**
-     * @private
-     * @type {module:zrender/core/GestureMgr}
-     */
-    this._gestureMgr = new GestureMgr();
-
     this._handlers = {};
 
     initDomHandler(this);
@@ -10745,12 +11041,12 @@ var instances = {};    // ZRender实例map索引
 /**
  * @type {string}
  */
-var version = '4.0.4';
+var version = '4.1.0';
 
 /**
  * Initializing a zrender instance
  * @param {HTMLElement} dom
- * @param {Object} opts
+ * @param {Object} [opts]
  * @param {string} [opts.renderer='canvas'] 'canvas' or 'svg'
  * @param {number} [opts.devicePixelRatio]
  * @param {number|string} [opts.width] Can be 'auto' (the same as null/undefined)
@@ -10944,14 +11240,14 @@ ZRender.prototype = {
      */
     refreshImmediately: function () {
         // var start = new Date();
+
         // Clear needsRefresh ahead to avoid something wrong happens in refresh
         // Or it will cause zrender refreshes again and again.
-        this._needsRefresh = false;
+        this._needsRefresh = this._needsRefreshHover = false;
         this.painter.refresh();
-        /**
-         * Avoid trigger zr.refresh in Element#beforeUpdate hook
-         */
-        this._needsRefresh = false;
+        // Avoid trigger zr.refresh in Element#beforeUpdate hook
+        this._needsRefresh = this._needsRefreshHover = false;
+
         // var end = new Date();
         // var log = document.getElementById('log');
         // if (log) {
@@ -10962,7 +11258,7 @@ ZRender.prototype = {
     /**
      * Mark and repaint the canvas in the next frame of browser
      */
-    refresh: function() {
+    refresh: function () {
         this._needsRefresh = true;
     },
 
@@ -11041,7 +11337,7 @@ ZRender.prototype = {
      * @param {number|string} [opts.width] Can be 'auto' (the same as null/undefined)
      * @param {number|string} [opts.height] Can be 'auto' (the same as null/undefined)
      */
-    resize: function(opts) {
+    resize: function (opts) {
         opts = opts || {};
         this.painter.resize(opts.width, opts.height);
         this.handler.resize();
@@ -11057,14 +11353,14 @@ ZRender.prototype = {
     /**
      * Get container width
      */
-    getWidth: function() {
+    getWidth: function () {
         return this.painter.getWidth();
     },
 
     /**
      * Get container height
      */
-    getHeight: function() {
+    getHeight: function () {
         return this.painter.getHeight();
     },
 
@@ -11087,7 +11383,7 @@ ZRender.prototype = {
      * @param {number} width
      * @param {number} height
      */
-    pathToImage: function(e, dpr) {
+    pathToImage: function (e, dpr) {
         return this.painter.pathToImage(e, dpr);
     },
 
@@ -11116,7 +11412,7 @@ ZRender.prototype = {
      * @param {Function} eventHandler Handler function
      * @param {Object} [context] Context object
      */
-    on: function(eventName, eventHandler, context) {
+    on: function (eventName, eventHandler, context) {
         this.handler.on(eventName, eventHandler, context);
     },
 
@@ -11125,7 +11421,7 @@ ZRender.prototype = {
      * @param {string} eventName Event name
      * @param {Function} [eventHandler] Handler function
      */
-    off: function(eventName, eventHandler) {
+    off: function (eventName, eventHandler) {
         this.handler.off(eventName, eventHandler);
     },
 
@@ -11243,7 +11539,7 @@ function cubicRootAt(p0, p1, p2, p3, val, roots) {
     // Evaluate roots of cubic functions
     var a = p3 + 3 * (p1 - p2) - p0;
     var b = 3 * (p2 - p1 * 2 + p0);
-    var c = 3 * (p1  - p0);
+    var c = 3 * (p1 - p0);
     var d = p0 - val;
 
     var A = b * b - 3 * a * c;
@@ -11340,7 +11636,7 @@ function cubicExtrema(p0, p1, p2, p3, extrema) {
     if (isAroundZero(a)) {
         if (isNotAroundZero$1(b)) {
             var t1 = -c / b;
-            if (t1 >= 0 && t1 <=1) {
+            if (t1 >= 0 && t1 <= 1) {
                 extrema[n++] = t1;
             }
         }
@@ -11918,7 +12214,7 @@ var mathSin$1 = Math.sin;
 var mathSqrt$1 = Math.sqrt;
 var mathAbs = Math.abs;
 
-var hasTypedArray = typeof Float32Array != 'undefined';
+var hasTypedArray = typeof Float32Array !== 'undefined';
 
 /**
  * @alias module:zrender/core/PathProxy
@@ -11969,9 +12265,11 @@ PathProxy.prototype = {
     /**
      * @readOnly
      */
-    setScale: function (sx, sy) {
-        this._ux = mathAbs(1 / devicePixelRatio / sx) || 0;
-        this._uy = mathAbs(1 / devicePixelRatio / sy) || 0;
+    setScale: function (sx, sy, segmentIgnoreThreshold) {
+        // Compat. Previously there is no segmentIgnoreThreshold.
+        segmentIgnoreThreshold = segmentIgnoreThreshold || 0;
+        this._ux = mathAbs(segmentIgnoreThreshold / devicePixelRatio / sx) || 0;
+        this._uy = mathAbs(segmentIgnoreThreshold / devicePixelRatio / sy) || 0;
     },
 
     getContext: function () {
@@ -12208,7 +12506,7 @@ PathProxy.prototype = {
 
         var len$$1 = data.length;
 
-        if (! (this.data && this.data.length == len$$1) && hasTypedArray) {
+        if (!(this.data && this.data.length === len$$1) && hasTypedArray) {
             this.data = new Float32Array(len$$1);
         }
 
@@ -12316,7 +12614,7 @@ PathProxy.prototype = {
         y -= offset * dy;
 
         while ((dx > 0 && x <= x1) || (dx < 0 && x >= x1)
-        || (dx == 0 && ((dy > 0 && y <= y1) || (dy < 0 && y >= y1)))) {
+        || (dx === 0 && ((dy > 0 && y <= y1) || (dy < 0 && y >= y1)))) {
             idx = this._dashIdx;
             dash = lineDash[idx];
             x += dx * dash;
@@ -12446,7 +12744,7 @@ PathProxy.prototype = {
         for (var i = 0; i < data.length;) {
             var cmd = data[i++];
 
-            if (i == 1) {
+            if (i === 1) {
                 // 如果第一个命令是 L, C, Q
                 // 则 previous point 同绘制命令的第一个 point
                 //
@@ -12501,10 +12799,10 @@ PathProxy.prototype = {
                     var startAngle = data[i++];
                     var endAngle = data[i++] + startAngle;
                     // TODO Arc 旋转
-                    var psi = data[i++];
+                    i += 1;
                     var anticlockwise = 1 - data[i++];
 
-                    if (i == 1) {
+                    if (i === 1) {
                         // 直接使用 arc 命令
                         // 第一个命令起点还未定义
                         x0 = mathCos$1(startAngle) * rx + cx;
@@ -12564,7 +12862,7 @@ PathProxy.prototype = {
         for (var i = 0; i < len$$1;) {
             var cmd = d[i++];
 
-            if (i == 1) {
+            if (i === 1) {
                 // 如果第一个命令是 L, C, Q
                 // 则 previous point 同绘制命令的第一个 point
                 //
@@ -12630,7 +12928,7 @@ PathProxy.prototype = {
                         ctx.arc(cx, cy, r, theta, endAngle, 1 - fs);
                     }
 
-                    if (i == 1) {
+                    if (i === 1) {
                         // 直接使用 arc 命令
                         // 第一个命令起点还未定义
                         x0 = mathCos$1(theta) * rx + cx;
@@ -12685,7 +12983,7 @@ function containStroke$1(x0, y0, x1, y1, lineWidth, x, y) {
 
     if (x0 !== x1) {
         _a = (y0 - y1) / (x0 - x1);
-        _b = (x0 * y1 - x1 * y0) / (x0 - x1) ;
+        _b = (x0 * y1 - x1 * y0) / (x0 - x1);
     }
     else {
         return Math.abs(x - x0) <= _l / 2;
@@ -12695,6 +12993,21 @@ function containStroke$1(x0, y0, x1, y1, lineWidth, x, y) {
     return _s <= _l / 2 * _l / 2;
 }
 
+/**
+ * 三次贝塞尔曲线描边包含判断
+ * @param  {number}  x0
+ * @param  {number}  y0
+ * @param  {number}  x1
+ * @param  {number}  y1
+ * @param  {number}  x2
+ * @param  {number}  y2
+ * @param  {number}  x3
+ * @param  {number}  y3
+ * @param  {number}  lineWidth
+ * @param  {number}  x
+ * @param  {number}  y
+ * @return {boolean}
+ */
 function containStroke$2(x0, y0, x1, y1, x2, y2, x3, y3, lineWidth, x, y) {
     if (lineWidth === 0) {
         return false;
@@ -12716,6 +13029,19 @@ function containStroke$2(x0, y0, x1, y1, x2, y2, x3, y3, lineWidth, x, y) {
     return d <= _l / 2;
 }
 
+/**
+ * 二次贝塞尔曲线描边包含判断
+ * @param  {number}  x0
+ * @param  {number}  y0
+ * @param  {number}  x1
+ * @param  {number}  y1
+ * @param  {number}  x2
+ * @param  {number}  y2
+ * @param  {number}  lineWidth
+ * @param  {number}  x
+ * @param  {number}  y
+ * @return {boolean}
+ */
 function containStroke$3(x0, y0, x1, y1, x2, y2, lineWidth, x, y) {
     if (lineWidth === 0) {
         return false;
@@ -12787,7 +13113,8 @@ function containStroke$4(
         var tmp = startAngle;
         startAngle = normalizeRadian(endAngle);
         endAngle = normalizeRadian(tmp);
-    } else {
+    }
+    else {
         startAngle = normalizeRadian(startAngle);
         endAngle = normalizeRadian(endAngle);
     }
@@ -12859,7 +13186,8 @@ function windingCubic(x0, y0, x1, y1, x2, y2, x3, y3, x, y) {
     else {
         var w = 0;
         var nExtrema = -1;
-        var y0_, y1_;
+        var y0_;
+        var y1_;
         for (var i = 0; i < nRoots; i++) {
             var t = roots[i];
 
@@ -12880,7 +13208,7 @@ function windingCubic(x0, y0, x1, y1, x2, y2, x3, y3, x, y) {
                     y1_ = cubicAt(y0, y1, y2, y3, extrema[1]);
                 }
             }
-            if (nExtrema == 2) {
+            if (nExtrema === 2) {
                 // 分成三段单调函数
                 if (t < extrema[0]) {
                     w += y0_ < y0 ? unit : -unit;
@@ -12977,7 +13305,8 @@ function windingArc(
         var dir = anticlockwise ? 1 : -1;
         if (x >= roots[0] + cx && x <= roots[1] + cx) {
             return dir;
-        } else {
+        }
+        else {
             return 0;
         }
     }
@@ -13039,7 +13368,7 @@ function containPath(data, lineWidth, isStroke, x, y) {
             // }
         }
 
-        if (i == 1) {
+        if (i === 1) {
             // 如果第一个命令是 L, C, Q
             // 则 previous point 同绘制命令的第一个 point
             //
@@ -13120,7 +13449,7 @@ function containPath(data, lineWidth, isStroke, x, y) {
                 var theta = data[i++];
                 var dTheta = data[i++];
                 // TODO Arc 旋转
-                var psi = data[i++];
+                i += 1;
                 var anticlockwise = 1 - data[i++];
                 var x1 = Math.cos(theta) * rx + cx;
                 var y1 = Math.sin(theta) * ry + cy;
@@ -13241,6 +13570,17 @@ Path.prototype = {
 
     strokeContainThreshold: 5,
 
+    // This item default to be false. But in map series in echarts,
+    // in order to improve performance, it should be set to true,
+    // so the shorty segment won't draw.
+    segmentIgnoreThreshold: 0,
+
+    /**
+     * See `module:zrender/src/graphic/helper/subPixelOptimize`.
+     * @type {boolean}
+     */
+    subPixelOptimize: false,
+
     brush: function (ctx, prevEl) {
         var style = this.style;
         var path = this.path || pathProxyForDraw;
@@ -13290,7 +13630,7 @@ Path.prototype = {
 
         // Update path sx, sy
         var scale = this.getGlobalScale();
-        path.setScale(scale[0], scale[1]);
+        path.setScale(scale[0], scale[1], this.segmentIgnoreThreshold);
 
         // Proxy context
         // Rebuild path in following 2 cases
@@ -13560,7 +13900,7 @@ Path.extend = function (defaults$$1) {
             var thisShape = this.shape;
             for (var name in defaultShape) {
                 if (
-                    ! thisShape.hasOwnProperty(name)
+                    !thisShape.hasOwnProperty(name)
                     && defaultShape.hasOwnProperty(name)
                 ) {
                     thisShape[name] = defaultShape[name];
@@ -13679,18 +14019,24 @@ var transformPath = function (path, m) {
     }
 };
 
+// command chars
+// var cc = [
+//     'm', 'M', 'l', 'L', 'v', 'V', 'h', 'H', 'z', 'Z',
+//     'c', 'C', 'q', 'Q', 't', 'T', 's', 'S', 'a', 'A'
+// ];
+
 var mathSqrt = Math.sqrt;
 var mathSin = Math.sin;
 var mathCos = Math.cos;
 var PI = Math.PI;
 
-var vMag = function(v) {
+var vMag = function (v) {
     return Math.sqrt(v[0] * v[0] + v[1] * v[1]);
 };
-var vRatio = function(u, v) {
+var vRatio = function (u, v) {
     return (u[0] * v[0] + u[1] * v[1]) / (vMag(u) * vMag(v));
 };
-var vAngle = function(u, v) {
+var vAngle = function (u, v) {
     return (u[0] * v[1] < u[1] * v[0] ? -1 : 1)
             * Math.acos(vRatio(u, v));
 };
@@ -14112,6 +14458,12 @@ var path = (Object.freeze || Object)({
 	mergePath: mergePath
 });
 
+/**
+ * @alias zrender/graphic/Text
+ * @extends module:zrender/graphic/Displayable
+ * @constructor
+ * @param {Object} opts
+ */
 var Text = function (opts) { // jshint ignore:line
     Displayable.call(this, opts);
 };
@@ -14142,6 +14494,9 @@ Text.prototype = {
         // style.bind(ctx, this, prevEl);
 
         if (!needDrawText(text, style)) {
+            // The current el.style is not applied
+            // and should not be used as cache.
+            ctx.__attrCachedBy = ContextCachedBy.NONE;
             return;
         }
 
@@ -14168,6 +14523,7 @@ Text.prototype = {
                 style.textAlign,
                 style.textVerticalAlign,
                 style.textPadding,
+                style.textLineHeight,
                 style.rich
             );
 
@@ -14225,9 +14581,118 @@ var Circle = Path.extend({
 });
 
 /**
+ * Sub-pixel optimize for canvas rendering, prevent from blur
+ * when rendering a thin vertical/horizontal line.
+ */
+
+var round = Math.round;
+
+/**
+ * Sub pixel optimize line for canvas
+ *
+ * @param {Object} outputShape The modification will be performed on `outputShape`.
+ *                 `outputShape` and `inputShape` can be the same object.
+ *                 `outputShape` object can be used repeatly, because all of
+ *                 the `x1`, `x2`, `y1`, `y2` will be assigned in this method.
+ * @param {Object} [inputShape]
+ * @param {number} [inputShape.x1]
+ * @param {number} [inputShape.y1]
+ * @param {number} [inputShape.x2]
+ * @param {number} [inputShape.y2]
+ * @param {Object} [style]
+ * @param {number} [style.lineWidth]
+ */
+function subPixelOptimizeLine(outputShape, inputShape, style) {
+    var lineWidth = style && style.lineWidth;
+
+    if (!inputShape || !lineWidth) {
+        return;
+    }
+
+    var x1 = inputShape.x1;
+    var x2 = inputShape.x2;
+    var y1 = inputShape.y1;
+    var y2 = inputShape.y2;
+
+    if (round(x1 * 2) === round(x2 * 2)) {
+        outputShape.x1 = outputShape.x2 = subPixelOptimize(x1, lineWidth, true);
+    }
+    else {
+        outputShape.x1 = x1;
+        outputShape.x2 = x2;
+    }
+    if (round(y1 * 2) === round(y2 * 2)) {
+        outputShape.y1 = outputShape.y2 = subPixelOptimize(y1, lineWidth, true);
+    }
+    else {
+        outputShape.y1 = y1;
+        outputShape.y2 = y2;
+    }
+}
+
+/**
+ * Sub pixel optimize rect for canvas
+ *
+ * @param {Object} outputShape The modification will be performed on `outputShape`.
+ *                 `outputShape` and `inputShape` can be the same object.
+ *                 `outputShape` object can be used repeatly, because all of
+ *                 the `x`, `y`, `width`, `height` will be assigned in this method.
+ * @param {Object} [inputShape]
+ * @param {number} [inputShape.x]
+ * @param {number} [inputShape.y]
+ * @param {number} [inputShape.width]
+ * @param {number} [inputShape.height]
+ * @param {Object} [style]
+ * @param {number} [style.lineWidth]
+ */
+function subPixelOptimizeRect(outputShape, inputShape, style) {
+    var lineWidth = style && style.lineWidth;
+
+    if (!inputShape || !lineWidth) {
+        return;
+    }
+
+    var originX = inputShape.x;
+    var originY = inputShape.y;
+    var originWidth = inputShape.width;
+    var originHeight = inputShape.height;
+
+    outputShape.x = subPixelOptimize(originX, lineWidth, true);
+    outputShape.y = subPixelOptimize(originY, lineWidth, true);
+    outputShape.width = Math.max(
+        subPixelOptimize(originX + originWidth, lineWidth, false) - outputShape.x,
+        originWidth === 0 ? 0 : 1
+    );
+    outputShape.height = Math.max(
+        subPixelOptimize(originY + originHeight, lineWidth, false) - outputShape.y,
+        originHeight === 0 ? 0 : 1
+    );
+}
+
+/**
+ * Sub pixel optimize for canvas
+ *
+ * @param {number} position Coordinate, such as x, y
+ * @param {number} lineWidth Should be nonnegative integer.
+ * @param {boolean=} positiveOrNegative Default false (negative).
+ * @return {number} Optimized position.
+ */
+function subPixelOptimize(position, lineWidth, positiveOrNegative) {
+    // Assure that (position + lineWidth / 2) is near integer edge,
+    // otherwise line will be fuzzy in canvas.
+    var doubledPosition = round(position * 2);
+    return (doubledPosition + round(lineWidth)) % 2 === 0
+        ? doubledPosition / 2
+        : (doubledPosition + (positiveOrNegative ? 1 : -1)) / 2;
+}
+
+/**
  * 矩形
  * @module zrender/graphic/shape/Rect
  */
+
+// Avoid create repeatly.
+var subPixelOptimizeOutputShape = {};
 
 var Rect = Path.extend({
 
@@ -14248,10 +14713,27 @@ var Rect = Path.extend({
     },
 
     buildPath: function (ctx, shape) {
-        var x = shape.x;
-        var y = shape.y;
-        var width = shape.width;
-        var height = shape.height;
+        var x;
+        var y;
+        var width;
+        var height;
+
+        if (this.subPixelOptimize) {
+            subPixelOptimizeRect(subPixelOptimizeOutputShape, shape, this.style);
+            x = subPixelOptimizeOutputShape.x;
+            y = subPixelOptimizeOutputShape.y;
+            width = subPixelOptimizeOutputShape.width;
+            height = subPixelOptimizeOutputShape.height;
+            subPixelOptimizeOutputShape.r = shape.r;
+            shape = subPixelOptimizeOutputShape;
+        }
+        else {
+            x = shape.x;
+            y = shape.y;
+            width = shape.width;
+            height = shape.height;
+        }
+
         if (!shape.r) {
             ctx.rect(x, y, width, height);
         }
@@ -14300,6 +14782,9 @@ var Ellipse = Path.extend({
  * @module zrender/graphic/shape/Line
  */
 
+// Avoid create repeatly.
+var subPixelOptimizeOutputShape$1 = {};
+
 var Line = Path.extend({
 
     type: 'line',
@@ -14321,10 +14806,25 @@ var Line = Path.extend({
     },
 
     buildPath: function (ctx, shape) {
-        var x1 = shape.x1;
-        var y1 = shape.y1;
-        var x2 = shape.x2;
-        var y2 = shape.y2;
+        var x1;
+        var y1;
+        var x2;
+        var y2;
+
+        if (this.subPixelOptimize) {
+            subPixelOptimizeLine(subPixelOptimizeOutputShape$1, shape, this.style);
+            x1 = subPixelOptimizeOutputShape$1.x1;
+            y1 = subPixelOptimizeOutputShape$1.y1;
+            x2 = subPixelOptimizeOutputShape$1.x2;
+            y2 = subPixelOptimizeOutputShape$1.y2;
+        }
+        else {
+            x1 = shape.x1;
+            y1 = shape.y1;
+            x2 = shape.x2;
+            y2 = shape.y2;
+        }
+
         var percent = shape.percent;
 
         if (percent === 0) {
@@ -14362,6 +14862,9 @@ var Line = Path.extend({
  *         errorrik (errorrik@gmail.com)
  */
 
+/**
+ * @inner
+ */
 function interpolate(p0, p1, p2, p3, t, t2, t3) {
     var v0 = (p2 - p0) * 0.5;
     var v1 = (p3 - p1) * 0.5;
@@ -14427,6 +14930,17 @@ var smoothSpline = function (points, isLoop) {
  *         errorrik (errorrik@gmail.com)
  */
 
+/**
+ * 贝塞尔平滑曲线
+ * @alias module:zrender/shape/util/smoothBezier
+ * @param {Array} points 线段顶点数组
+ * @param {number} smooth 平滑等级, 0-1
+ * @param {boolean} isLoop
+ * @param {Array} constraint 将计算出来的控制点约束在一个包围盒内
+ *                           比如 [[0, 0], [100, 100]], 这个包围盒会与
+ *                           整个折线的包围盒做一个并集用来约束控制点。
+ * @param {Array} 计算出来的控制点数组
+ */
 var smoothBezier = function (points, smooth, isLoop, constraint) {
     var cps = [];
 
@@ -14436,7 +14950,8 @@ var smoothBezier = function (points, smooth, isLoop, constraint) {
     var prevPoint;
     var nextPoint;
 
-    var min$$1, max$$1;
+    var min$$1;
+    var max$$1;
     if (constraint) {
         min$$1 = [Infinity, Infinity];
         max$$1 = [-Infinity, -Infinity];
@@ -14609,6 +15124,15 @@ Gradient.prototype = {
 
 };
 
+/**
+ * x, y, x2, y2 are all percent from 0 to 1
+ * @param {number} [x=0]
+ * @param {number} [y=0]
+ * @param {number} [x2=1]
+ * @param {number} [y2=0]
+ * @param {Array.<Object>} colorStops
+ * @param {boolean} [globalCoord=false]
+ */
 var LinearGradient = function (x, y, x2, y2, colorStops, globalCoord) {
     // Should do nothing more in this constructor. Because gradient can be
     // declard by `color: {type: 'linear', colorStops: ...}`, where
@@ -14638,6 +15162,10 @@ LinearGradient.prototype = {
 
 inherits(LinearGradient, Gradient);
 
+// import RadialGradient from '../graphic/RadialGradient';
+// import Pattern from '../graphic/Pattern';
+// import * as vector from '../core/vector';
+// Most of the values can be separated by comma and/or white space.
 var DILIMITER_REG = /[\s,]+/;
 
 /**
@@ -14848,14 +15376,14 @@ SVGParser.prototype._parseText = function (xmlNode, parentGroup) {
 };
 
 var nodeParsers = {
-    'g': function(xmlNode, parentGroup) {
+    'g': function (xmlNode, parentGroup) {
         var g = new Group();
         inheritStyle(parentGroup, g);
         parseAttributes(xmlNode, g, this._defs);
 
         return g;
     },
-    'rect': function(xmlNode, parentGroup) {
+    'rect': function (xmlNode, parentGroup) {
         var rect = new Rect();
         inheritStyle(parentGroup, rect);
         parseAttributes(xmlNode, rect, this._defs);
@@ -14872,7 +15400,7 @@ var nodeParsers = {
 
         return rect;
     },
-    'circle': function(xmlNode, parentGroup) {
+    'circle': function (xmlNode, parentGroup) {
         var circle = new Circle();
         inheritStyle(parentGroup, circle);
         parseAttributes(xmlNode, circle, this._defs);
@@ -14885,7 +15413,7 @@ var nodeParsers = {
 
         return circle;
     },
-    'line': function(xmlNode, parentGroup) {
+    'line': function (xmlNode, parentGroup) {
         var line = new Line();
         inheritStyle(parentGroup, line);
         parseAttributes(xmlNode, line, this._defs);
@@ -14899,7 +15427,7 @@ var nodeParsers = {
 
         return line;
     },
-    'ellipse': function(xmlNode, parentGroup) {
+    'ellipse': function (xmlNode, parentGroup) {
         var ellipse = new Ellipse();
         inheritStyle(parentGroup, ellipse);
         parseAttributes(xmlNode, ellipse, this._defs);
@@ -14912,7 +15440,7 @@ var nodeParsers = {
         });
         return ellipse;
     },
-    'polygon': function(xmlNode, parentGroup) {
+    'polygon': function (xmlNode, parentGroup) {
         var points = xmlNode.getAttribute('points');
         if (points) {
             points = parsePoints(points);
@@ -14928,7 +15456,7 @@ var nodeParsers = {
 
         return polygon;
     },
-    'polyline': function(xmlNode, parentGroup) {
+    'polyline': function (xmlNode, parentGroup) {
         var path = new Path();
         inheritStyle(parentGroup, path);
         parseAttributes(xmlNode, path, this._defs);
@@ -14945,7 +15473,7 @@ var nodeParsers = {
 
         return polyline;
     },
-    'image': function(xmlNode, parentGroup) {
+    'image': function (xmlNode, parentGroup) {
         var img = new ZImage();
         inheritStyle(parentGroup, img);
         parseAttributes(xmlNode, img, this._defs);
@@ -14960,7 +15488,7 @@ var nodeParsers = {
 
         return img;
     },
-    'text': function(xmlNode, parentGroup) {
+    'text': function (xmlNode, parentGroup) {
         var x = xmlNode.getAttribute('x') || 0;
         var y = xmlNode.getAttribute('y') || 0;
         var dx = xmlNode.getAttribute('dx') || 0;
@@ -15000,7 +15528,7 @@ var nodeParsers = {
 
         return g;
     },
-    'path': function(xmlNode, parentGroup) {
+    'path': function (xmlNode, parentGroup) {
         // TODO svg fill rule
         // https://developer.mozilla.org/en-US/docs/Web/SVG/Attribute/fill-rule
         // path.style.globalCompositeOperation = 'xor';
@@ -15019,11 +15547,11 @@ var nodeParsers = {
 
 var defineParsers = {
 
-    'lineargradient': function(xmlNode) {
-        var x1 = parseInt(xmlNode.getAttribute('x1') || 0);
-        var y1 = parseInt(xmlNode.getAttribute('y1') || 0);
-        var x2 = parseInt(xmlNode.getAttribute('x2') || 10);
-        var y2 = parseInt(xmlNode.getAttribute('y2') || 0);
+    'lineargradient': function (xmlNode) {
+        var x1 = parseInt(xmlNode.getAttribute('x1') || 0, 10);
+        var y1 = parseInt(xmlNode.getAttribute('y1') || 0, 10);
+        var x2 = parseInt(xmlNode.getAttribute('x2') || 10, 10);
+        var y2 = parseInt(xmlNode.getAttribute('y2') || 0, 10);
 
         var gradient = new LinearGradient(x1, y1, x2, y2);
 
@@ -15032,7 +15560,7 @@ var defineParsers = {
         return gradient;
     },
 
-    'radialgradient': function(xmlNode) {
+    'radialgradient': function (xmlNode) {
 
     }
 };
@@ -15045,9 +15573,9 @@ function _parseGradientColorStops(xmlNode, gradient) {
         if (stop.nodeType === 1) {
             var offset = stop.getAttribute('offset');
             if (offset.indexOf('%') > 0) {  // percentage
-                offset = parseInt(offset) / 100;
+                offset = parseInt(offset, 10) / 100;
             }
-            else if(offset) {    // number from 0 to 1
+            else if (offset) {    // number from 0 to 1
                 offset = parseFloat(offset);
             }
             else {
@@ -15075,9 +15603,9 @@ function parsePoints(pointsString) {
     var list = trim(pointsString).split(DILIMITER_REG);
     var points = [];
 
-    for (var i = 0; i < list.length; i+=2) {
+    for (var i = 0; i < list.length; i += 2) {
         var x = parseFloat(list[i]);
-        var y = parseFloat(list[i+1]);
+        var y = parseFloat(list[i + 1]);
         points.push([x, y]);
     }
     return points;
@@ -15196,14 +15724,14 @@ function parseTransformAttribute(xmlNode, node) {
         transform = transform.replace(/,/g, ' ');
         var m = null;
         var transformOps = [];
-        transform.replace(transformRegex, function(str, type, value) {
+        transform.replace(transformRegex, function (str, type, value) {
             transformOps.push(type, value);
         });
-        for(var i = transformOps.length - 1; i > 0; i-=2) {
+        for (var i = transformOps.length - 1; i > 0; i -= 2) {
             var value = transformOps[i];
-            var type = transformOps[i-1];
+            var type = transformOps[i - 1];
             m = m || create$1();
-            switch(type) {
+            switch (type) {
                 case 'translate':
                     value = trim(value).split(DILIMITER_REG);
                     translate(m, m, [parseFloat(value[0]), parseFloat(value[1] || 0)]);
@@ -15231,9 +15759,8 @@ function parseTransformAttribute(xmlNode, node) {
                     break;
             }
         }
+        node.setLocalTransform(m);
     }
-    node.setLocalTransform(m);
-
 }
 
 // Value may contain space.
@@ -15306,291 +15833,6 @@ function parseSVG(xml, opt) {
     return parser.parse(xml, opt);
 }
 
-function isNumber(value){
-    return typeof value === 'number' && value === value
-}
-
-function Clip$2(config) {
-    var conf = config || {};
-    // { loop, startIndex, endIndex, duration, delay, gap, onframe, ondestroy, onrestart }
-    this.onframe = conf.onframe || noop;
-    this.ondestroy = conf.ondestroy || noop;
-    this.onrestart = conf.onrestart || noop;
-
-    this._duration = conf.duration || 1000;
-    this._doneList = [];
-    this._onframeList = [];
-    this._initialized = false;
-    // 延时
-    this._delay = conf.delay || 0;
-    // 是否循环
-    this._loop = !!(conf.loop);
-    this._gap = conf.gap || 0;
-
-    this._startIndex = isNumber(conf.startIndex) ? conf.startIndex : 0;
-    this._endIndex =  isNumber(conf.endIndex) ? conf.endIndex : 0;
-    this._index = 0;
-
-    this._pausedTime = 0;
-    this._paused = false;
-    this._nextTime = 0;
-    this._needRestart = false;
-  }
-Clip$2.prototype = {
-
-    constructor: Clip$2,
-    setConfig:function(config){
-        /**
-         * @config startIndex(0) 开始位置
-         * @config endIndex(0) 结束位置
-         * @config duration(1000) 动画间隔
-         */
-        if(config.hasOwnProperty('startIndex') && isNumber(config.startIndex)){
-            this._startIndex = config.startIndex;
-            this._needRestart = true;
-        }
-        if(config.hasOwnProperty('endIndex') && isNumber(config.endIdnex)){
-            this._endIndex = config.endIndex;
-            this._needRestart = true;
-        }
-        if(config.hasOwnProperty('duration')&& isNumber(config.duration)){
-            this._duration = config.duration;
-        }
-        
-    },
-    /**
-     * 开始执行动画
-     * @return {module:zrender/animation/Animator}
-     */
-    start:function() {
-        if (!this._frameCount || this._startIndex >= this._frameCount - 1) {
-             return this._doneCallback()
-        }
-        return this
-    },
-    /**
-     * @return {Array.<module:zrender/animation/Clip>}
-     */
-    getClips:function() {
-        return [this]
-    },
-    /**
-     *
-     * @param {*} globalTime Animation 运行时间
-     * @param {*} deltaTime 两次调用的时间差
-     */
-    step:function(globalTime, deltaTime) {
-        // Set startTime on first step, or _startTime may has milleseconds different between clips
-        // PENDING
-        if (!this._initialized) {
-            this._startTime = globalTime + this._delay;
-            this._index = this._startIndex + 1;
-            this._nextTime = this._startTime + this._duration;
-            this._initialized = true;
-        }
-        if(this._needRestart){
-            this._needRestart = false;
-            this.restart(globalTime);
-            return 
-        }
-        if (this._paused) {
-            this._pausedTime += deltaTime;
-            return
-        }
-
-        if (globalTime - this._pausedTime >= this._nextTime) {
-            this.onframe(this._index);
-            this._index = this._index + 1;
-            // 如果帧全部播放完
-            if (this._index > this._endIndex) {
-                if (this._loop) {
-                    this.restart(globalTime);
-                    // 重新开始周期
-                    // 抛出而不是直接调用事件直到 stage.update 后再统一调用这些事件
-                    return 'restart'
-                }
-
-                // 动画完成将这个控制器标识为待删除
-                // 在Animation.update中进行批量删除
-                this._needsRemove = true;
-                return 'destroy'
-            } else {
-                this._nextTime = this._nextTime + this._duration;
-            }
-        }
-
-        return null
-    },
-
-    restart:function(globalTime) {
-        this._startTime = globalTime + this._gap;
-        this._pausedTime = 0;
-        this._needsRemove = false;
-        this._index = this._startIndex;
-        this._nextTime = this._duration + this._startTime;// 上一帧保留时间 + 开始时间
-    },
-
-    pause:function() {
-        this._paused = true;
-    },
-
-    resume:function() {
-        this._paused = false;
-    },
-    isPaused:function() {
-        return !!this._paused
-    },
-
-    _doneCallback:function() {
-        var doneList = this._doneList;
-        var len = doneList.length;
-        for (var i = 0; i < len; i++) {
-            doneList[i].call(this);
-        }
-    },
-    fire:function(eventType, arg) {
-        eventType = 'on' + eventType;
-        if (this[eventType]) {
-            this[eventType](arg);
-        }
-    }
-};
-
-/**
- * @alias zrender/graphic/Sprite 
- * @extends module:zrender/graphic/Displayable
- * @constructor
- * @param {Object} opts
- */
-function ZSprite(opts) {
-    var _this = this;
-    Displayable.call(this, opts);
-    ['pause','resume','isPaused'].forEach(function(method){
-        _this[method]= function(){
-            return _this._clip && _this._clip[method]()
-        };
-    });
-}
-
-ZSprite.prototype = {
-
-    constructor: ZSprite,
-    type: 'sprite',
-    /**
-     * 
-     */
-    setClip:function(config){
-        //TODO:重新设置Clip属性
-        config && this._clip.setConfig(config);
-        return this
-    },
-    brush: function(ctx, prevEl) {
-        var style = this.style;
-        var src = style.image;
-        var zr = this.__zr;
-        var _this = this;
-        // Must bind each time
-        style.bind(ctx, this, prevEl);
-
-        style.offset_x = style.offset_x || 0;
-        style.offset_y = style.offset_y || 0;
-        style.padding_x = style.padding_x || 0;
-        style.padding_y = style.padding_y || 0;
-        style.numFrames = style.numFrames || 0;
-        style.frame = style.frame || 0;
-
-        this.autoplay = this.clip.autoplay === true;
-
-        var image = this._image = createOrUpdateImage(
-        src,
-        this._image,
-        this,
-        function(image) {
-            // Set the full source image dimensions
-            _this.full_width = image.width;
-            _this.full_height = image.height;
-            var dir = style.direction || 'x';
-            var padding_size = (dir === "y") ? style.padding_y : style.padding_x;
-            // If automatic generation is specified
-            var length_full = (dir === "y") ? _this.full_height : _this.full_width;
-            var length_cropped = (dir === "y") ? style.h : style.w;
-            style.numFrames = style.numFrames > 0 ? style.numFrames : Math.floor((length_full - padding_size * 2)/ length_cropped);
-            _this._clip = new Clip$2({
-                loop: _this.clip.loop,
-                startIndex: _this.clip.startIndex || 0,
-                endIndex: _this.clip.endIdnex || style.numFrames - 1,
-                duration: _this.clip.duration,
-                onframe: function(frameIndex) {
-                    _this.setStyle('frame',frameIndex);
-                }
-            });
-            _this.autoplay && _this._clip.start();
-            // If animate after added to the zrender
-            zr && zr.animation.addAnimator(_this._clip);
-            _this.loaded = true;
-            isFunction(_this.onload) && _this.onload();
-        });
-
-        if (!image || !isImageReady(image)) {
-            return
-        }
-
-        // 设置transform
-        this.setTransform(ctx);
-        if (this.loaded) {
-            // console.log('call brush::::', style.frame, this.frames)
-            this._draw(ctx, style);
-        }
-        // Draw rect text
-        if (style.text != null) {
-            // Only restore transform when needs draw text.
-            this.restoreTransform(ctx);
-            this.drawRectText(ctx, this.getBoundingRect());
-        }
-    },
-    _draw: function(ctx, style) {
-        // var _this = this
-        var x = style.x || 0;
-        var y = style.y || 0;
-
-        // If the image has not been loaded or the sprite has no frames, the frame size must be 0 (for clipChildren feature).
-        var fw = style.w;
-        var fh = style.h;
-        var frameIndex = style.frame;
-        var dir = style.direction || 'x';
-        var padding_size = (dir === "y") ? style.padding_y : style.padding_x;
-        var frame = {
-            x: padding_size + style.offset_x + (frameIndex * (dir === "x" ? style.w : 0)),
-            y: padding_size + style.offset_y + (frameIndex * (dir === "y" ? style.h : 0))
-        };
-        if (frameIndex > style.numFrames) {
-            // Do clip with an empty path
-            if (this.clipChildren) {
-                ctx.beginPath();
-                ctx.rect(x, y, 0, 0);
-                ctx.closePath();
-                ctx.clip();
-            }
-            return this
-        }
-        // Draw the current sprite part
-        ctx.drawImage(this._image, frame.x, frame.y, fw, fh, x, y, fw, fh);
-        if (this.strokeWidth > 0) {
-            ctx.lineWidth = this.strokeWidth;
-            ctx.strokeStyle = this.strokeColor;
-            ctx.strokeRect(x, y, fw, fh);
-        }
-    },
-    getBoundingRect:function() {
-        var style = this.style;
-        if (!this._rect) {
-            this._rect = new BoundingRect( style.x || 0, style.y || 0, style.w || 0, style.h || 0);
-        }
-        return this._rect
-    }
-};
-inherits(ZSprite, Displayable);
-
 // CompoundPath to improve performance
 
 var CompoundPath = Path.extend({
@@ -15622,7 +15864,7 @@ var CompoundPath = Path.extend({
             if (!paths[i].path) {
                 paths[i].createPathProxy();
             }
-            paths[i].path.setScale(scale[0], scale[1]);
+            paths[i].path.setScale(scale[0], scale[1], paths[i].segmentIgnoreThreshold);
         }
     },
 
@@ -15644,15 +15886,17 @@ var CompoundPath = Path.extend({
         this._updatePathDirty();
         return Path.prototype.getBoundingRect.call(this);
     }
-});
+    return ret;
+};
 
 /**
  * Displayable for incremental rendering. It will be rendered in a separate layer
- * IncrementalDisplay have too main methods. `clearDisplayables` and `addDisplayables`
+ * IncrementalDisplay have two main methods. `clearDisplayables` and `addDisplayables`
  * addDisplayables will render the added displayables incremetally.
  *
  * It use a not clearFlag to tell the painter don't clear the layer if it's the first element.
  */
+// TODO Style override ?
 function IncrementalDisplayble(opts) {
 
     Displayable.call(this, opts);
@@ -15694,7 +15938,7 @@ IncrementalDisplayble.prototype.addDisplayables = function (displayables, notPer
     }
 };
 
-IncrementalDisplayble.prototype.eachPendingDisplayable = function  (cb) {
+IncrementalDisplayble.prototype.eachPendingDisplayable = function (cb) {
     for (var i = this._cursor; i < this._displayables.length; i++) {
         cb && cb(this._displayables[i]);
     }
@@ -15869,6 +16113,7 @@ var BezierCurve = Path.extend({
 
     style: {
         stroke: '#000',
+
         fill: null
     },
 
@@ -15964,7 +16209,7 @@ var Droplet = Path.extend({
         width: 0, height: 0
     },
 
-    buildPath : function (ctx, shape) {
+    buildPath: function (ctx, shape) {
         var x = shape.cx;
         var y = shape.cy;
         var a = shape.width;
@@ -16019,7 +16264,7 @@ var Heart = Path.extend({
             x, y + b
         );
         ctx.bezierCurveTo(
-            x - a *  2, y + b / 3,
+            x - a * 2, y + b / 3,
             x - a / 2, y - b * 2 / 3,
             x, y
         );
@@ -16135,7 +16380,7 @@ var Rose = Path.extend({
 
         ctx.moveTo(x0, y0);
 
-        for (var i = 0, len = R.length; i < len ; i++) {
+        for (var i = 0, len = R.length; i < len; i++) {
             r = R[i];
 
             for (var j = 0; j <= 360 * n; j++) {
@@ -16362,7 +16607,7 @@ var Trochoid = Path.extend({
         var d = shape.d;
         var offsetX = shape.cx;
         var offsetY = shape.cy;
-        var delta = shape.location == 'out' ? 1 : -1;
+        var delta = shape.location === 'out' ? 1 : -1;
 
         if (shape.location && R <= r) {
             return;
@@ -16388,7 +16633,7 @@ var Trochoid = Path.extend({
         do {
             theta = Math.PI / 180 * i;
             x2 = (R + delta * r) * cos$3(theta)
-                    - delta * d * cos$3((R / r +  delta) * theta)
+                    - delta * d * cos$3((R / r + delta) * theta)
                     + offsetX;
             y2 = (R + delta * r) * sin$3(theta)
                     - d * sin$3((R / r + delta) * theta)
@@ -16401,6 +16646,14 @@ var Trochoid = Path.extend({
     }
 });
 
+/**
+ * x, y, r are all percent from 0 to 1
+ * @param {number} [x=0.5]
+ * @param {number} [y=0.5]
+ * @param {number} [r=0.5]
+ * @param {Array.<Object>} [colorStops]
+ * @param {boolean} [globalCoord=false]
+ */
 var RadialGradient = function (x, y, r, colorStops, globalCoord) {
     // Should do nothing more in this constructor. Because gradient can be
     // declard by `color: {type: 'radial', colorStops: ...}`, where
@@ -16482,9 +16735,6 @@ function setTransform(svgEl, m) {
 function attr(el, key, val) {
     if (!val || val.type !== 'linear' && val.type !== 'radial') {
         // Don't set attribute for gradient, since it need new dom nodes
-        if (typeof val === 'string' && val.indexOf('NaN') > -1) {
-            console.log(val);
-        }
         el.setAttribute(key, val);
     }
 }
@@ -16497,26 +16747,6 @@ function bindStyle(svgEl, style, isText, el) {
     if (pathHasFill(style, isText)) {
         var fill = isText ? style.textFill : style.fill;
         fill = fill === 'transparent' ? NONE : fill;
-
-        /**
-         * FIXME:
-         * This is a temporary fix for Chrome's clipping bug
-         * that happens when a clip-path is referring another one.
-         * This fix should be used before Chrome's bug is fixed.
-         * For an element that has clip-path, and fill is none,
-         * set it to be "rgba(0, 0, 0, 0.002)" will hide the element.
-         * Otherwise, it will show black fill color.
-         * 0.002 is used because this won't work for alpha values smaller
-         * than 0.002.
-         *
-         * See
-         * https://bugs.chromium.org/p/chromium/issues/detail?id=659790
-         * for more information.
-         */
-        if (svgEl.getAttribute('clip-path') !== 'none' && fill === NONE) {
-            fill = 'rgba(0, 0, 0, 0.002)';
-        }
-
         attr(svgEl, 'fill', fill);
         attr(svgEl, 'fill-opacity', style.fillOpacity != null ? style.fillOpacity * style.opacity : style.opacity);
     }
@@ -16687,6 +16917,7 @@ svgPath.brush = function (el) {
 
     if (el.__dirtyPath) {
         path.beginPath();
+        path.subPixelOptimize = false;
         el.buildPath(path, el.shape);
         el.__dirtyPath = false;
 
@@ -16718,7 +16949,7 @@ svgImage.brush = function (el) {
         var src = image.src;
         image = src;
     }
-    if (! image) {
+    if (!image) {
         return;
     }
 
@@ -16729,7 +16960,7 @@ svgImage.brush = function (el) {
     var dh = style.height;
 
     var svgEl = el.__svgEl;
-    if (! svgEl) {
+    if (!svgEl) {
         svgEl = createElement('image');
         el.__svgEl = svgEl;
     }
@@ -16758,6 +16989,7 @@ svgImage.brush = function (el) {
  **************************************************/
 var svgText = {};
 var tmpRect$2 = new BoundingRect();
+var tmpTextPositionResult = {};
 
 var svgTextDrawRectText = function (el, rect, textRect) {
     var style = el.style;
@@ -16775,7 +17007,7 @@ var svgTextDrawRectText = function (el, rect, textRect) {
     }
 
     var textSvgEl = el.__textSvgEl;
-    if (! textSvgEl) {
+    if (!textSvgEl) {
         textSvgEl = createElement('text');
         el.__textSvgEl = textSvgEl;
     }
@@ -16783,7 +17015,6 @@ var svgTextDrawRectText = function (el, rect, textRect) {
     var x;
     var y;
     var textPosition = style.textPosition;
-    var distance = style.textDistance;
     var align = style.textAlign || 'left';
 
     if (typeof style.fontSize === 'number') {
@@ -16796,12 +17027,14 @@ var svgTextDrawRectText = function (el, rect, textRect) {
             style.fontSize || '',
             style.fontFamily || ''
         ].join(' ')
-        || DEFAULT_FONT;
+        || DEFAULT_FONT$1;
 
-    var verticalAlign = getVerticalAlignForSvg(style.textVerticalAlign);
+    var verticalAlign = style.textVerticalAlign;
 
-    textRect = getBoundingRect(text, font, align,
-        verticalAlign);
+    textRect = getBoundingRect(
+        text, font, align,
+        verticalAlign, style.textPadding, style.textLineHeight
+    );
 
     var lineHeight = textRect.lineHeight;
     // Text position represented by coord
@@ -16810,16 +17043,16 @@ var svgTextDrawRectText = function (el, rect, textRect) {
         y = rect.y + textPosition[1];
     }
     else {
-        var newPos = adjustTextPositionOnRect(
-            textPosition, rect, distance
-        );
+        var newPos = el.calculateTextPosition
+            ? el.calculateTextPosition(tmpTextPositionResult, style, rect)
+            : calculateTextPosition(tmpTextPositionResult, style, rect);
         x = newPos.x;
         y = newPos.y;
-        verticalAlign = getVerticalAlignForSvg(newPos.textVerticalAlign);
+        verticalAlign = newPos.textVerticalAlign;
         align = newPos.textAlign;
     }
 
-    attr(textSvgEl, 'alignment-baseline', verticalAlign);
+    setVerticalAlign(textSvgEl, verticalAlign);
 
     if (font) {
         textSvgEl.style.font = font;
@@ -16862,7 +17095,10 @@ var svgTextDrawRectText = function (el, rect, textRect) {
         var rotate$$1 = -style.textRotation || 0;
         var transform = create$1();
         // Apply textRotate to element matrix
-        rotate(transform, el.transform, rotate$$1);
+        rotate(transform, transform, rotate$$1);
+
+        var pos = [el.transform[4], el.transform[5]];
+        translate(transform, transform, pos);
         setTransform(textSvgEl, transform);
     }
 
@@ -16870,7 +17106,7 @@ var svgTextDrawRectText = function (el, rect, textRect) {
     var nTextLines = textLines.length;
     var textAnchor = align;
     // PENDING
-    if (textAnchor === 'left')  {
+    if (textAnchor === 'left') {
         textAnchor = 'start';
         textPadding && (x += textPadding[3]);
     }
@@ -16884,7 +17120,7 @@ var svgTextDrawRectText = function (el, rect, textRect) {
     }
 
     var dy = 0;
-    if (verticalAlign === 'baseline') {
+    if (verticalAlign === 'bottom') {
         dy = -textRect.height + lineHeight;
         textPadding && (dy -= textPadding[2]);
     }
@@ -16903,10 +17139,10 @@ var svgTextDrawRectText = function (el, rect, textRect) {
         for (var i = 0; i < nTextLines; i++) {
             // Using cached tspan elements
             var tspan = tspanList[i];
-            if (! tspan) {
+            if (!tspan) {
                 tspan = tspanList[i] = createElement('tspan');
                 textSvgEl.appendChild(tspan);
-                attr(tspan, 'alignment-baseline', verticalAlign);
+                setVerticalAlign(tspan, verticalAlign);
                 attr(tspan, 'text-anchor', textAnchor);
             }
             else {
@@ -16938,15 +17174,21 @@ var svgTextDrawRectText = function (el, rect, textRect) {
     }
 };
 
-function getVerticalAlignForSvg(verticalAlign) {
-    if (verticalAlign === 'middle') {
-        return 'middle';
-    }
-    else if (verticalAlign === 'bottom') {
-        return 'baseline';
-    }
-    else {
-        return 'hanging';
+function setVerticalAlign(textSvgEl, verticalAlign) {
+    switch (verticalAlign) {
+        case 'middle':
+            attr(textSvgEl, 'dominant-baseline', 'middle');
+            attr(textSvgEl, 'alignment-baseline', 'middle');
+            break;
+
+        case 'bottom':
+            attr(textSvgEl, 'dominant-baseline', 'ideographic');
+            attr(textSvgEl, 'alignment-baseline', 'ideographic');
+            break;
+
+        default:
+            attr(textSvgEl, 'dominant-baseline', 'hanging');
+            attr(textSvgEl, 'alignment-baseline', 'hanging');
     }
 }
 
@@ -17559,7 +17801,25 @@ GradientManager.prototype.updateDom = function (gradient, dom) {
     for (var i = 0, len = colors.length; i < len; ++i) {
         var stop = this.createElement('stop');
         stop.setAttribute('offset', colors[i].offset * 100 + '%');
-        stop.setAttribute('stop-color', colors[i].color);
+
+        var color = colors[i].color;
+        if (color.indexOf('rgba' > -1)) {
+            // Fix Safari bug that stop-color not recognizing alpha #9014
+            var opacity = parse(color)[3];
+            var hex = toHex(color);
+
+            // stop-color cannot be color, since:
+            // The opacity value used for the gradient calculation is the
+            // *product* of the value of stop-opacity and the opacity of the
+            // value of stop-color.
+            // See https://www.w3.org/TR/SVG2/pservers.html#StopOpacityProperty
+            stop.setAttribute('stop-color', '#' + hex);
+            stop.setAttribute('stop-opacity', opacity);
+        }
+        else {
+            stop.setAttribute('stop-color', colors[i].color);
+        }
+
         dom.appendChild(stop);
     }
 
@@ -17733,7 +17993,8 @@ ClippathManager.prototype.updateDom = function (
  */
 ClippathManager.prototype.markUsed = function (displayable) {
     var that = this;
-    if (displayable.__clipPaths && displayable.__clipPaths.length > 0) {
+    // displayable.__clipPaths can only be `null`/`undefined` or an non-empty array.
+    if (displayable.__clipPaths) {
         each(displayable.__clipPaths, function (clipPath) {
             if (clipPath._dom) {
                 Definable.prototype.markUsed.call(that, clipPath._dom);
@@ -18166,9 +18427,9 @@ SVGPainter.prototype = {
             else if (!item.removed) {
                 for (var k = 0; k < item.count; k++) {
                     var displayable = newVisibleList[item.indices[k]];
-                    prevSvgElement
-                        = svgElement
-                        = getTextSvgElement(displayable)
+                    prevSvgElement =
+                        svgElement =
+                        getTextSvgElement(displayable)
                         || getSvgElement(displayable)
                         || prevSvgElement;
 
@@ -18297,10 +18558,10 @@ SVGPainter.prototype = {
     dispose: function () {
         this.root.innerHTML = '';
 
-        this._svgRoot
-            = this._viewport
-            = this.storage
-            = null;
+        this._svgRoot =
+            this._viewport =
+            this.storage =
+            null;
     },
 
     clear: function () {
@@ -18383,7 +18644,7 @@ function initVML() {
 // TODO Use proxy like svg instead of overwrite brush methods
 
 var CMD$4 = PathProxy.CMD;
-var round = Math.round;
+var round$1 = Math.round;
 var sqrt = Math.sqrt;
 var abs$1 = Math.abs;
 var cos$4 = Math.cos;
@@ -18403,7 +18664,7 @@ if (!env$1.canvasSupported) {
 
     var initRootElStyle = function (el) {
         el.style.cssText = 'position:absolute;left:0;top:0;width:1px;height:1px;';
-        el.coordsize = Z + ','  + Z;
+        el.coordsize = Z + ',' + Z;
         el.coordorigin = '0,0';
     };
 
@@ -18531,7 +18792,7 @@ if (!env$1.canvasSupported) {
                 // We need to sort the color stops in ascending order by offset,
                 // otherwise IE won't interpret it correctly.
                 var stops = fill.colorStops.slice();
-                stops.sort(function(cs1, cs2) {
+                stops.sort(function (cs1, cs2) {
                     return cs1.offset - cs2.offset;
                 });
 
@@ -18588,7 +18849,7 @@ if (!env$1.canvasSupported) {
         // if (style.lineCap != null) {
         //     el.endcap = style.lineCap;
         // }
-        if (style.lineDash != null) {
+        if (style.lineDash) {
             el.dashstyle = style.lineDash.join(' ');
         }
         if (style.stroke != null && !(style.stroke instanceof Gradient)) {
@@ -18597,7 +18858,7 @@ if (!env$1.canvasSupported) {
     };
 
     var updateFillAndStroke = function (vmlEl, type, style, zrEl) {
-        var isFill = type == 'fill';
+        var isFill = type === 'fill';
         var el = vmlEl.getElementsByTagName(type)[0];
         // Stroke must have lineWidth
         if (style[type] != null && style[type] !== 'none' && (isFill || (!isFill && style.lineWidth))) {
@@ -18752,14 +19013,14 @@ if (!env$1.canvasSupported) {
                     }
                     str.push(
                         type,
-                        round(((cx - rx) * sx + x) * Z - Z2), comma,
-                        round(((cy - ry) * sy + y) * Z - Z2), comma,
-                        round(((cx + rx) * sx + x) * Z - Z2), comma,
-                        round(((cy + ry) * sy + y) * Z - Z2), comma,
-                        round((x0 * sx + x) * Z - Z2), comma,
-                        round((y0 * sy + y) * Z - Z2), comma,
-                        round((x1 * sx + x) * Z - Z2), comma,
-                        round((y1 * sy + y) * Z - Z2)
+                        round$1(((cx - rx) * sx + x) * Z - Z2), comma,
+                        round$1(((cy - ry) * sy + y) * Z - Z2), comma,
+                        round$1(((cx + rx) * sx + x) * Z - Z2), comma,
+                        round$1(((cy + ry) * sy + y) * Z - Z2), comma,
+                        round$1((x0 * sx + x) * Z - Z2), comma,
+                        round$1((y0 * sy + y) * Z - Z2), comma,
+                        round$1((x1 * sx + x) * Z - Z2), comma,
+                        round$1((y1 * sy + y) * Z - Z2)
                     );
 
                     xi = x1;
@@ -18780,10 +19041,10 @@ if (!env$1.canvasSupported) {
                         applyTransform(p1, p1, m);
                     }
 
-                    p0[0] = round(p0[0] * Z - Z2);
-                    p1[0] = round(p1[0] * Z - Z2);
-                    p0[1] = round(p0[1] * Z - Z2);
-                    p1[1] = round(p1[1] * Z - Z2);
+                    p0[0] = round$1(p0[0] * Z - Z2);
+                    p1[0] = round$1(p1[0] * Z - Z2);
+                    p0[1] = round$1(p0[1] * Z - Z2);
+                    p1[1] = round$1(p1[1] * Z - Z2);
                     str.push(
                         // x0, y0
                         ' m ', p0[0], comma, p0[1],
@@ -18808,7 +19069,7 @@ if (!env$1.canvasSupported) {
                     m && applyTransform(p, p, m);
                     // 不 round 会非常慢
                     str.push(
-                        round(p[0] * Z - Z2), comma, round(p[1] * Z - Z2),
+                        round$1(p[0] * Z - Z2), comma, round$1(p[1] * Z - Z2),
                         k < nPoint - 1 ? comma : ''
                     );
                 }
@@ -18852,6 +19113,7 @@ if (!env$1.canvasSupported) {
         var path = this.path || (this.path = new PathProxy());
         if (this.__dirtyPath) {
             path.beginPath();
+            path.subPixelOptimize = false;
             this.buildPath(path, this.shape);
             path.toStatic();
             this.__dirtyPath = false;
@@ -18997,10 +19259,10 @@ if (!env$1.canvasSupported) {
                         'M12=', m[2] / scaleY, comma,
                         'M21=', m[1] / scaleX, comma,
                         'M22=', m[3] / scaleY, comma,
-                        'Dx=', round(x * scaleX + m[4]), comma,
-                        'Dy=', round(y * scaleY + m[5]));
+                        'Dx=', round$1(x * scaleX + m[4]), comma,
+                        'Dy=', round$1(y * scaleY + m[5]));
 
-            vmlElStyle.padding = '0 ' + round(maxX) + 'px ' + round(maxY) + 'px 0';
+            vmlElStyle.padding = '0 ' + round$1(maxX) + 'px ' + round$1(maxY) + 'px 0';
             // FIXME DXImageTransform 在 IE11 的兼容模式下不起作用
             vmlElStyle.filter = imageTransformPrefix + '.Matrix('
                 + transformFilter.join('') + ', SizingMethod=clip)';
@@ -19012,8 +19274,8 @@ if (!env$1.canvasSupported) {
                 y = y * scaleY + m[5];
             }
             vmlElStyle.filter = '';
-            vmlElStyle.left = round(x) + 'px';
-            vmlElStyle.top = round(y) + 'px';
+            vmlElStyle.left = round$1(x) + 'px';
+            vmlElStyle.top = round$1(y) + 'px';
         }
 
         var imageEl = this._imageEl;
@@ -19026,7 +19288,7 @@ if (!env$1.canvasSupported) {
         var imageELStyle = imageEl.style;
         if (hasCrop) {
             // Needs know image original width and height
-            if (! (ow && oh)) {
+            if (!(ow && oh)) {
                 var tmpImage = new Image();
                 var self = this;
                 tmpImage.onload = function () {
@@ -19034,8 +19296,8 @@ if (!env$1.canvasSupported) {
                     ow = tmpImage.width;
                     oh = tmpImage.height;
                     // Adjust image width and height to fit the ratio destinationSize / sourceSize
-                    imageELStyle.width = round(scaleX * ow * dw / sw) + 'px';
-                    imageELStyle.height = round(scaleY * oh * dh / sh) + 'px';
+                    imageELStyle.width = round$1(scaleX * ow * dw / sw) + 'px';
+                    imageELStyle.height = round$1(scaleY * oh * dh / sh) + 'px';
 
                     // Caching image original width, height and src
                     self._imageWidth = ow;
@@ -19045,31 +19307,31 @@ if (!env$1.canvasSupported) {
                 tmpImage.src = image;
             }
             else {
-                imageELStyle.width = round(scaleX * ow * dw / sw) + 'px';
-                imageELStyle.height = round(scaleY * oh * dh / sh) + 'px';
+                imageELStyle.width = round$1(scaleX * ow * dw / sw) + 'px';
+                imageELStyle.height = round$1(scaleY * oh * dh / sh) + 'px';
             }
 
-            if (! cropEl) {
+            if (!cropEl) {
                 cropEl = doc.createElement('div');
                 cropEl.style.overflow = 'hidden';
                 this._cropEl = cropEl;
             }
             var cropElStyle = cropEl.style;
-            cropElStyle.width = round((dw + sx * dw / sw) * scaleX);
-            cropElStyle.height = round((dh + sy * dh / sh) * scaleY);
+            cropElStyle.width = round$1((dw + sx * dw / sw) * scaleX);
+            cropElStyle.height = round$1((dh + sy * dh / sh) * scaleY);
             cropElStyle.filter = imageTransformPrefix + '.Matrix(Dx='
                     + (-sx * dw / sw * scaleX) + ',Dy=' + (-sy * dh / sh * scaleY) + ')';
 
-            if (! cropEl.parentNode) {
+            if (!cropEl.parentNode) {
                 vmlEl.appendChild(cropEl);
             }
-            if (imageEl.parentNode != cropEl) {
+            if (imageEl.parentNode !== cropEl) {
                 cropEl.appendChild(imageEl);
             }
         }
         else {
-            imageELStyle.width = round(scaleX * dw) + 'px';
-            imageELStyle.height = round(scaleY * dh) + 'px';
+            imageELStyle.width = round$1(scaleX * dw) + 'px';
+            imageELStyle.height = round$1(scaleY * dh) + 'px';
 
             vmlEl.appendChild(imageEl);
 
@@ -19082,7 +19344,7 @@ if (!env$1.canvasSupported) {
         var filterStr = '';
         var alpha = style.opacity;
         if (alpha < 1) {
-            filterStr += '.Alpha(opacity=' + round(alpha * 100) + ') ';
+            filterStr += '.Alpha(opacity=' + round$1(alpha * 100) + ') ';
         }
         filterStr += imageTransformPrefix + '.AlphaImageLoader(src=' + image + ', SizingMethod=scale)';
 
@@ -19171,7 +19433,8 @@ if (!env$1.canvasSupported) {
 
         try {
             textMeasureEl.style.font = textFont;
-        } catch (ex) {
+        }
+        catch (ex) {
             // Ignore failures to set to invalid font.
         }
         textMeasureEl.innerHTML = '';
@@ -19224,7 +19487,9 @@ if (!env$1.canvasSupported) {
         var font = fontStyle.style + ' ' + fontStyle.variant + ' ' + fontStyle.weight + ' '
             + fontStyle.size + 'px "' + fontStyle.family + '"';
 
-        textRect = textRect || getBoundingRect(text, font, align, verticalAlign);
+        textRect = textRect || getBoundingRect(
+            text, font, align, verticalAlign, style.textPadding, style.textLineHeight
+        );
 
         // Transform rect to view space
         var m = this.transform;
@@ -19237,7 +19502,6 @@ if (!env$1.canvasSupported) {
 
         if (!fromTextEl) {
             var textPosition = style.textPosition;
-            var distance$$1 = style.textDistance;
             // Text position represented by coord
             if (textPosition instanceof Array) {
                 x = rect.x + parsePercent$1(textPosition[0], rect.width);
@@ -19246,9 +19510,9 @@ if (!env$1.canvasSupported) {
                 align = align || 'left';
             }
             else {
-                var res = adjustTextPositionOnRect(
-                    textPosition, rect, distance$$1
-                );
+                var res = this.calculateTextPosition
+                    ? this.calculateTextPosition({}, style, rect)
+                    : calculateTextPosition({}, style, rect);
                 x = res.x;
                 y = res.y;
 
@@ -19350,11 +19614,11 @@ if (!env$1.canvasSupported) {
 
             skewEl.on = true;
 
-            skewEl.matrix = m[0].toFixed(3) + comma + m[2].toFixed(3) + comma +
-            m[1].toFixed(3) + comma + m[3].toFixed(3) + ',0,0';
+            skewEl.matrix = m[0].toFixed(3) + comma + m[2].toFixed(3) + comma
+                            + m[1].toFixed(3) + comma + m[3].toFixed(3) + ',0,0';
 
             // Text position
-            skewEl.offset = (round(coords[0]) || 0) + ',' + (round(coords[1]) || 0);
+            skewEl.offset = (round$1(coords[0]) || 0) + ',' + (round$1(coords[1]) || 0);
             // Left top point as origin
             skewEl.origin = '0 0';
 
@@ -19363,8 +19627,8 @@ if (!env$1.canvasSupported) {
         }
         else {
             skewEl.on = false;
-            textVmlElStyle.left = round(x) + 'px';
-            textVmlElStyle.top = round(y) + 'px';
+            textVmlElStyle.left = round$1(x) + 'px';
+            textVmlElStyle.top = round$1(y) + 'px';
         }
 
         textPathEl.string = encodeHtmlAttribute(text);
@@ -19382,7 +19646,7 @@ if (!env$1.canvasSupported) {
         updateFillAndStroke(textVmlEl, 'stroke', {
             stroke: style.textStroke,
             opacity: style.opacity,
-            lineDash: style.lineDash
+            lineDash: style.lineDash || null // style.lineDash can be `false`.
         }, this);
 
         textVmlEl.style.zIndex = getZIndex(this.zlevel, this.z, this.z2);
@@ -19563,7 +19827,7 @@ VMLPainter.prototype = {
         var width = width == null ? this._getWidth() : width;
         var height = height == null ? this._getHeight() : height;
 
-        if (this._width != width || this._height != height) {
+        if (this._width !== width || this._height !== height) {
             this._width = width;
             this._height = height;
 

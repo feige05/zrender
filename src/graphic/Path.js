@@ -35,6 +35,17 @@ Path.prototype = {
 
     strokeContainThreshold: 5,
 
+    // This item default to be false. But in map series in echarts,
+    // in order to improve performance, it should be set to true,
+    // so the shorty segment won't draw.
+    segmentIgnoreThreshold: 0,
+
+    /**
+     * See `module:zrender/src/graphic/helper/subPixelOptimize`.
+     * @type {boolean}
+     */
+    subPixelOptimize: false,
+
     brush: function (ctx, prevEl) {
         var style = this.style;
         var path = this.path || pathProxyForDraw;
@@ -84,7 +95,7 @@ Path.prototype = {
 
         // Update path sx, sy
         var scale = this.getGlobalScale();
-        path.setScale(scale[0], scale[1]);
+        path.setScale(scale[0], scale[1], this.segmentIgnoreThreshold);
 
         // Proxy context
         // Rebuild path in following 2 cases
@@ -354,7 +365,7 @@ Path.extend = function (defaults) {
             var thisShape = this.shape;
             for (var name in defaultShape) {
                 if (
-                    ! thisShape.hasOwnProperty(name)
+                    !thisShape.hasOwnProperty(name)
                     && defaultShape.hasOwnProperty(name)
                 ) {
                     thisShape[name] = defaultShape[name];

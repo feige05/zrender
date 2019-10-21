@@ -22,6 +22,8 @@ var arrySlice = Array.prototype.slice;
  *        param: {string} eventType
  *        param: {string|Object} query
  *        return: {boolean}
+ * @param {Function} [eventProcessor.afterTrigger] Call after all handlers called.
+ *        param: {string} eventType
  */
 var Eventful = function (eventProcessor) {
     this._$handlers = {};
@@ -41,38 +43,7 @@ Eventful.prototype = {
      * @param {Object} context
      */
     one: function (event, query, handler, context) {
-        var _h = this._$handlers;
-
-        if (typeof query === 'function') {
-            context = handler;
-            handler = query;
-            query = null;
-        }
-
-        if (!handler || !event) {
-            return this;
-        }
-
-        query = normalizeQuery(this, query);
-
-        if (!_h[event]) {
-            _h[event] = [];
-        }
-
-        for (var i = 0; i < _h[event].length; i++) {
-            if (_h[event][i].h === handler) {
-                return this;
-            }
-        }
-
-        _h[event].push({
-            h: handler,
-            one: true,
-            query: query,
-            ctx: context || this
-        });
-
-        return this;
+        return on(this, event, query, handler, context, true);
     },
 
     /**
@@ -84,38 +55,7 @@ Eventful.prototype = {
      * @param {Object} [context]
      */
     on: function (event, query, handler, context) {
-        var _h = this._$handlers;
-
-        if (typeof query === 'function') {
-            context = handler;
-            handler = query;
-            query = null;
-        }
-
-        if (!handler || !event) {
-            return this;
-        }
-
-        query = normalizeQuery(this, query);
-
-        if (!_h[event]) {
-            _h[event] = [];
-        }
-
-        for (var i = 0; i < _h[event].length; i++) {
-            if (_h[event][i].h === handler) {
-                return this;
-            }
-        }
-
-        _h[event].push({
-            h: handler,
-            one: false,
-            query: query,
-            ctx: context || this
-        });
-
-        return this;
+        return on(this, event, query, handler, context, false);
     },
 
     /**
@@ -126,7 +66,7 @@ Eventful.prototype = {
      */
     isSilent: function (event) {
         var _h = this._$handlers;
-        return _h[event] && _h[event].length;
+        return !_h[event] || !_h[event].length;
     },
 
     /**
@@ -147,7 +87,7 @@ Eventful.prototype = {
             if (_h[event]) {
                 var newList = [];
                 for (var i = 0, l = _h[event].length; i < l; i++) {
-                    if (_h[event][i].h != handler) {
+                    if (_h[event][i].h !== handler) {
                         newList.push(_h[event][i]);
                     }
                 }
@@ -171,16 +111,17 @@ Eventful.prototype = {
      * @param {string} type The event name.
      */
     trigger: function (type) {
-        if (this._$handlers[type]) {
+        var _h = this._$handlers[type];
+        var eventProcessor = this._$eventProcessor;
+
+        if (_h) {
             var args = arguments;
             var argLen = args.length;
-            var eventProcessor = this._$eventProcessor;
 
             if (argLen > 3) {
                 args = arrySlice.call(args, 1);
             }
 
-            var _h = this._$handlers[type];
             var len = _h.length;
             for (var i = 0; i < len;) {
                 var hItem = _h[i];
@@ -220,6 +161,9 @@ Eventful.prototype = {
             }
         }
 
+        eventProcessor && eventProcessor.afterTrigger
+            && eventProcessor.afterTrigger(type);
+
         return this;
     },
 
@@ -229,17 +173,18 @@ Eventful.prototype = {
      * @param {string} type The event name.
      */
     triggerWithContext: function (type) {
-        if (this._$handlers[type]) {
+        var _h = this._$handlers[type];
+        var eventProcessor = this._$eventProcessor;
+
+        if (_h) {
             var args = arguments;
             var argLen = args.length;
-            var eventProcessor = this._$eventProcessor;
 
             if (argLen > 4) {
                 args = arrySlice.call(args, 1, args.length - 1);
             }
             var ctx = args[args.length - 1];
 
-            var _h = this._$handlers[type];
             var len = _h.length;
             for (var i = 0; i < len;) {
                 var hItem = _h[i];
@@ -279,6 +224,9 @@ Eventful.prototype = {
             }
         }
 
+        eventProcessor && eventProcessor.afterTrigger
+            && eventProcessor.afterTrigger(type);
+
         return this;
     }
 };
@@ -289,6 +237,50 @@ function normalizeQuery(host, query) {
         query = eventProcessor.normalizeQuery(query);
     }
     return query;
+}
+
+function on(eventful, event, query, handler, context, isOnce) {
+    var _h = eventful._$handlers;
+
+    if (typeof query === 'function') {
+        context = handler;
+        handler = query;
+        query = null;
+    }
+
+    if (!handler || !event) {
+        return eventful;
+    }
+
+    query = normalizeQuery(eventful, query);
+
+    if (!_h[event]) {
+        _h[event] = [];
+    }
+
+    for (var i = 0; i < _h[event].length; i++) {
+        if (_h[event][i].h === handler) {
+            return eventful;
+        }
+    }
+
+    var wrap = {
+        h: handler,
+        one: isOnce,
+        query: query,
+        ctx: context || eventful,
+        // FIXME
+        // Do not publish this feature util it is proved that it makes sense.
+        callAtLast: handler.zrEventfulCallAtLast
+    };
+
+    var lastIndex = _h[event].length - 1;
+    var lastWrap = _h[event][lastIndex];
+    (lastWrap && lastWrap.callAtLast)
+        ? _h[event].splice(lastIndex, 0, wrap)
+        : _h[event].push(wrap);
+
+    return eventful;
 }
 
 // ----------------------

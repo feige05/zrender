@@ -28,12 +28,12 @@ var instances = {};    // ZRender实例map索引
 /**
  * @type {string}
  */
-export var version = '4.0.4';
+export var version = '4.1.1';
 
 /**
  * Initializing a zrender instance
  * @param {HTMLElement} dom
- * @param {Object} opts
+ * @param {Object} [opts]
  * @param {string} [opts.renderer='canvas'] 'canvas' or 'svg'
  * @param {number} [opts.devicePixelRatio]
  * @param {number|string} [opts.width] Can be 'auto' (the same as null/undefined)
@@ -227,14 +227,14 @@ ZRender.prototype = {
      */
     refreshImmediately: function () {
         // var start = new Date();
+
         // Clear needsRefresh ahead to avoid something wrong happens in refresh
         // Or it will cause zrender refreshes again and again.
-        this._needsRefresh = false;
+        this._needsRefresh = this._needsRefreshHover = false;
         this.painter.refresh();
-        /**
-         * Avoid trigger zr.refresh in Element#beforeUpdate hook
-         */
-        this._needsRefresh = false;
+        // Avoid trigger zr.refresh in Element#beforeUpdate hook
+        this._needsRefresh = this._needsRefreshHover = false;
+
         // var end = new Date();
         // var log = document.getElementById('log');
         // if (log) {
@@ -245,7 +245,7 @@ ZRender.prototype = {
     /**
      * Mark and repaint the canvas in the next frame of browser
      */
-    refresh: function() {
+    refresh: function () {
         this._needsRefresh = true;
     },
 
@@ -324,7 +324,7 @@ ZRender.prototype = {
      * @param {number|string} [opts.width] Can be 'auto' (the same as null/undefined)
      * @param {number|string} [opts.height] Can be 'auto' (the same as null/undefined)
      */
-    resize: function(opts) {
+    resize: function (opts) {
         opts = opts || {};
         this.painter.resize(opts.width, opts.height);
         this.handler.resize();
@@ -340,14 +340,14 @@ ZRender.prototype = {
     /**
      * Get container width
      */
-    getWidth: function() {
+    getWidth: function () {
         return this.painter.getWidth();
     },
 
     /**
      * Get container height
      */
-    getHeight: function() {
+    getHeight: function () {
         return this.painter.getHeight();
     },
 
@@ -370,7 +370,7 @@ ZRender.prototype = {
      * @param {number} width
      * @param {number} height
      */
-    pathToImage: function(e, dpr) {
+    pathToImage: function (e, dpr) {
         return this.painter.pathToImage(e, dpr);
     },
 
@@ -399,7 +399,7 @@ ZRender.prototype = {
      * @param {Function} eventHandler Handler function
      * @param {Object} [context] Context object
      */
-    on: function(eventName, eventHandler, context) {
+    on: function (eventName, eventHandler, context) {
         this.handler.on(eventName, eventHandler, context);
     },
 
@@ -408,7 +408,7 @@ ZRender.prototype = {
      * @param {string} eventName Event name
      * @param {Function} [eventHandler] Handler function
      */
-    off: function(eventName, eventHandler) {
+    off: function (eventName, eventHandler) {
         this.handler.off(eventName, eventHandler);
     },
 

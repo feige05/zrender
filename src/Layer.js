@@ -50,7 +50,7 @@ function createDom(id, painter, dpr) {
  * @param {module:zrender/Painter} painter
  * @param {number} [dpr]
  */
-var Layer = function(id, painter, dpr) {
+var Layer = function (id, painter, dpr) {
     var dom;
     dpr = dpr || devicePixelRatio;
     if (typeof id === 'string') {
@@ -71,8 +71,8 @@ var Layer = function(id, painter, dpr) {
         domStyle['user-select'] = 'none';
         domStyle['-webkit-touch-callout'] = 'none';
         domStyle['-webkit-tap-highlight-color'] = 'rgba(0,0,0,0)';
-        domStyle['padding'] = 0;
-        domStyle['margin'] = 0;
+        domStyle['padding'] = 0; // eslint-disable-line dot-notation
+        domStyle['margin'] = 0; // eslint-disable-line dot-notation
         domStyle['border-width'] = 0;
     }
 
@@ -139,7 +139,7 @@ Layer.prototype = {
         this.domBack = createDom('back-' + this.id, this.painter, dpr);
         this.ctxBack = this.domBack.getContext('2d');
 
-        if (dpr != 1) {
+        if (dpr !== 1) {
             this.ctxBack.scale(dpr, dpr);
         }
     },
@@ -167,7 +167,7 @@ Layer.prototype = {
             domBack.width = width * dpr;
             domBack.height = height * dpr;
 
-            if (dpr != 1) {
+            if (dpr !== 1) {
                 this.ctxBack.scale(dpr, dpr);
             }
         }

@@ -4,7 +4,7 @@
  * @module zrender/vml/Painter
  */
 
-import zrLog from '../core/log';
+import logError from '../core/log';
 import * as vmlCore from './core';
 import {each} from '../core/util';
 
@@ -133,7 +133,7 @@ VMLPainter.prototype = {
         var width = width == null ? this._getWidth() : width;
         var height = height == null ? this._getHeight() : height;
 
-        if (this._width != width || this._height != height) {
+        if (this._width !== width || this._height !== height) {
             this._width = width;
             this._height = height;
 
@@ -187,7 +187,7 @@ VMLPainter.prototype = {
 // Not supported methods
 function createMethodNotSupport(method) {
     return function () {
-        zrLog('In IE8.0 VML mode painter not support method "' + method + '"');
+        logError('In IE8.0 VML mode painter not support method "' + method + '"');
     };
 }
 
