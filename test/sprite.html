@@ -40,20 +40,18 @@
                 var sprite = new zrender.Sprite({
                     position: [0 * 20, 0 * 20],
                     scale: [1, 1],
-                    clip: {
-                        autoplay: true,
-                        loop: true,
-                        generate: true,
-                        frame: 0,
-                        duration: 500,
-                    },
                     style: {
                         image: 'th.jpeg',
                         x: 80,
                         y: 80,
                         w: 117,
                         h: 163,
-                        padding_x:0
+                        padding_x:0,
+                        autoplay: true,
+                        loop: true,
+                        generate: true,
+                        frame: 0,
+                        duration: 500,
                     },
                     draggable: true
                 });
