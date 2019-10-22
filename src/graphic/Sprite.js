@@ -70,7 +70,7 @@ ZSprite.prototype = {
         style.numFrames = numFrames;
 
         var frameIndex = 0;
-        var _clip = this._clip = new Clip({
+        this._clip = new Clip({
             loop: style.loop,
             gap: style.gap,
             life: style.life,
@@ -88,15 +88,11 @@ ZSprite.prototype = {
                 }
             }
         });
-        this._clip.getClips = function () {
-            return [_clip];
-        };
-
             if (!this.autoplay) {
                 this._clip.pause();
             }
             // If animate after added to the zrender
-            zr && zr.animation.addAnimator(this._clip);
+            zr && zr.animation.addClip(this._clip);
             this.loaded = true;
             zrUtil.isFunction(this.onload) && this.onload();
     },
